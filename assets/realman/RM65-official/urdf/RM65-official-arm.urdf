@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- RM65-B arm chain extracted from official rm_Lifting_robot_65B_jaw_description.urdf -->
+<robot name="RM65-official-arm">
+  <link name="base_link">
+    <visual>
+      <geometry>
+        <mesh filename="../meshes/arm_base_link1.STL" />
+      </geometry>
+    </visual>
+  </link>
+  <link name="r_link1">
+    <visual>
+      <geometry>
+        <mesh filename="../meshes/r_link1.STL" />
+      </geometry>
+    </visual>
+  </link>
+  <joint name="joint1" type="revolute">
+    <origin xyz="0 0 0.2405" rpy="0 0 -3.1416" />
+    <parent link="base_link" />
+    <child link="r_link1" />
+    <axis xyz="0 0 1" />
+    <limit lower="-3.11" upper="3.11" effort="60" velocity="3.14" />
+  </joint>
+  <link name="r_link2">
+    <visual>
+      <geometry>
+        <mesh filename="../meshes/r_link2.STL" />
+      </geometry>
+    </visual>
+  </link>
+  <joint name="joint2" type="revolute">
+    <origin xyz="0 0 0" rpy="1.5708 -1.5708 0" />
+    <parent link="r_link1" />
+    <child link="r_link2" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.27" upper="2.27" effort="60" velocity="3.14" />
+  </joint>
+  <link name="r_link3">
+    <visual>
+      <geometry>
+        <mesh filename="../meshes/r_link3.STL" />
+      </geometry>
+    </visual>
+  </link>
+  <joint name="joint3" type="revolute">
+    <origin xyz="0.256 0 0" rpy="0 0 1.5708" />
+    <parent link="r_link2" />
+    <child link="r_link3" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.36" upper="2.36" effort="30" velocity="3.925" />
+  </joint>
+  <link name="r_link4">
+    <visual>
+      <geometry>
+        <mesh filename="../meshes/r_link4.STL" />
+      </geometry>
+    </visual>
+  </link>
+  <joint name="joint4" type="revolute">
+    <origin xyz="0 -0.21 -0.00030007" rpy="1.5708 0 0" />
+    <parent link="r_link3" />
+    <child link="r_link4" />
+    <axis xyz="0 0 1" />
+    <limit lower="-3.11" upper="3.11" effort="10" velocity="3.925" />
+  </joint>
+  <link name="r_link5">
+    <visual>
+      <geometry>
+        <mesh filename="../meshes/r_link5.STL" />
+      </geometry>
+    </visual>
+  </link>
+  <joint name="joint5" type="revolute">
+    <origin xyz="0 0 0" rpy="-1.5708 0 0" />
+    <parent link="r_link4" />
+    <child link="r_link5" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.23" upper="2.23" effort="10" velocity="3.925" />
+  </joint>
+  <link name="r_link6">
+    <visual>
+      <geometry>
+        <mesh filename="../meshes/r_link6.STL" />
+      </geometry>
+    </visual>
+  </link>
+  <joint name="joint6" type="revolute">
+    <origin xyz="0 -0.11203 -0.00029971" rpy="1.5708 0 0" />
+    <parent link="r_link5" />
+    <child link="r_link6" />
+    <axis xyz="0 0 1" />
+    <limit lower="-6.28" upper="6.28" effort="10" velocity="3.925" />
+  </joint>
+</robot>

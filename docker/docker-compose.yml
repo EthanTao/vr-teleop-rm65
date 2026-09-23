@@ -1,0 +1,46 @@
+# XRoboToolkit VR teleop in Ubuntu Docker (Mac host + PICO 4 Ultra)
+#
+# Usage:
+#   docker compose -f docker/docker-compose.yml up --build
+#   # PICO app -> PC Service IP = your Mac's Wi-Fi IP (port 63901)
+#   # Browser  -> http://localhost:${MESHCAT_HOST_PORT:-18081}/static/
+#   # Note: avoid 7000–7002 on macOS (AirPlay); default viewer port is 18081.
+
+services:
+  xrobo-vr:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: xrobo-vr-teleop
+    ports:
+      - "63901:63901/tcp"
+      - "63901:63901/udp"
+      - "9090:9090/tcp"
+      - "9090:9090/udp"
+      # RM65 realtime UDP feedback (controller pushes joint/tcp state here)
+      - "8089:8089/udp"
+    environment:
+      # Optional: pass Mac LAN IP for startup banner (e.g. HOST_IP=192.168.1.42)
+      - HOST_IP=${HOST_IP:-}
+      - MESHCAT_HOST_PORT=${MESHCAT_HOST_PORT:-18081}
+      - XROBO_DEBUG=1
+      - XROBO_GRIP_THRESHOLD=0.5
+    volumes:
+      # Live-edit Python without rebuild (optional)
+      - ../xrobotoolkit_teleop:/workspace/xrobotoolkit_teleop:ro
+      - ../scripts:/workspace/scripts:ro
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+  # Docker Desktop on Mac may return empty HTTP responses when publishing
+  # Tornado (meshcat) directly. This TCP relay fixes browser access.
+  meshcat-proxy:
+    image: alpine:3.19
+    container_name: xrobo-meshcat-proxy
+    command: sh -c "apk add --no-cache socat >/dev/null && exec socat TCP-LISTEN:7000,fork,reuseaddr TCP:xrobo-vr-teleop:7000"
+    ports:
+      - "${MESHCAT_HOST_PORT:-18081}:7000/tcp"
+    depends_on:
+      - xrobo-vr
+    restart: unless-stopped

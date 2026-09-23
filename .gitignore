@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# macOS
+__MACOSX/
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Testing
+.pytest_cache/
+.htmlcov/
+.coverage
+
+# Build
+dist/
+build/
+
+# Environment
+.env
+
+# Local wheel staging
+.tmp-wheel/
+.codex/
