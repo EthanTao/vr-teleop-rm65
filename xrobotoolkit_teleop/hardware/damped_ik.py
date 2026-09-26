@@ -80,6 +80,8 @@ class DampedStep:
     scale: float
     damping: float
     status: str
+    # Human-readable reason for this step or refusal; diagnostics only, never a control input.
+    detail: str = ""
 
     @property
     def hold(self):
@@ -181,14 +183,14 @@ class DampedIK:
         if now >= self._cycle_deadline:
             self._budget_active = False
             raise DLSBudgetExceeded(
-                f"{where}: {self.compute_budget_s * 1000:.1f} ms compute budget exhausted",
+                f"{where}：{self.compute_budget_s * 1000:.1f} ms 计算预算已耗尽",
                 fk_calls=self._fk_calls,
                 elapsed_s=now - self._cycle_started_at,
             )
         if self._fk_calls + required_fk > self._cycle_max_fk_calls:
             self._budget_active = False
             raise DLSBudgetExceeded(
-                f"{where}: FK budget would exceed {self._cycle_max_fk_calls}",
+                f"{where}：FK 调用将超过上限 {self._cycle_max_fk_calls}",
                 fk_calls=self._fk_calls,
                 elapsed_s=now - self._cycle_started_at,
             )
@@ -225,7 +227,7 @@ class DampedIK:
         stencil[2 * rows, rows] += self.difference_step
         stencil[2 * rows + 1, rows] -= self.difference_step
         missing = sum(tuple(row) not in self._pose_cache for row in stencil)
-        self._require_budget(missing, "Jacobian")
+        self._require_budget(missing, "雅可比")
         jac = np.empty((6, 6))
         divisor = 2 * self.difference_step
         for i in range(6):
@@ -263,7 +265,7 @@ class DampedIK:
         self._path_cache[key] = verdict
         return verdict
 
-    def bounded_path_allowed(self, q, target, *, ratio, angles):
+    def bounded_path_allowed(self, q, target, *, ratio, angles, lag_limit_rad=None):
         """Constant-time realtime guard which never evaluates another Jacobian.
 
         The DLS step is already velocity/acceleration limited. This guard adds
@@ -271,17 +273,35 @@ class DampedIK:
         structural singularity when every affected joint moves outward. If the
         SVD ratio alone is already in the hard zone, there is no cheap, reliable
         escape proof, so the realtime path holds instead of searching.
+
+        ``lag_limit_rad`` keeps every structural guard and additionally allows one case the
+        seed-only criterion cannot express: the seed is a command the arm has not finished
+        yet, and the target may legitimately sit between the seed and the measured joints.
+        When the target is within ``lag_limit_rad`` of the measured joints, the hard J3/J5
+        hard-zone *entry* rejection is dropped, but the exact J3/J5 zero-crossing rejection
+        is still evaluated from the measured joints - the position the arm physically
+        occupies. Passing ``None`` keeps the original seed-only criterion.
         """
         q = _finite_vector(q, 6, "path start")
         target = _finite_vector(target, 6, "path target")
         ratio = float(ratio)
         angles = _finite_vector(angles, 2, "singularity joint angles")
+        within_measured_step = False
+        if lag_limit_rad is not None:
+            lag_limit = _finite_vector(lag_limit_rad, 6, "tracking allowance")
+            if np.any(lag_limit <= 0.0):
+                raise ValueError("tracking allowance must be positive")
+            within_measured_step = bool(np.all(np.abs(target - np.asarray(q, dtype=float)) <= lag_limit + 1e-9))
         q3, q5 = float(q[2]), float(q[4])
         target3, target5 = float(target[2]), float(target[4])
         if q3 * target3 < 0.0 or q5 * target5 < 0.0:
             return False
         next_angles = np.abs(target[[2, 4]])
         hard = angles <= self.stop_joint_rad
+        if within_measured_step:
+            # One bounded catch-up step measured from where the arm actually is. It may not
+            # enter the J3/J5 hard zone and may not make a hard-zone axis worse than measured.
+            return not bool(np.any(next_angles < np.minimum(angles, self.stop_joint_rad) - 1e-10))
         if ratio <= self.stop_ratio and not np.any(hard):
             return False
         if np.any(hard):
@@ -332,14 +352,30 @@ class DampedIK:
         max_linear_speed=0.05,
         max_angular_speed=0.25,
         max_joint_acceleration=0.5,
+        lag_speed_scale=1.0,
         reset_cycle=True,
     ):
+        """Compute one bounded joint step.
+
+        ``speed_limits`` is the per-joint velocity budget (rad/s). ``lag_speed_scale``
+        additionally shrinks this step so the command cannot keep running away from the
+        measured joints: the caller derives it from the remaining tracking allowance, so
+        1.0 means "full speed" and 0.0 means "hold here". It is deliberately applied to
+        the already acceleration-limited velocity, which keeps the reported speed
+        monotonic instead of producing a one-cycle spike.
+        """
         if reset_cycle:
             self.begin_cycle(enforce_budget=True)
         q = _finite_vector(seed, 6, "seed")
         xyz = _finite_vector(xyz, 3, "target xyz")
         quat = _normalized_quaternion(quat, "target quaternion")
         speeds = _finite_vector(speed_limits, 6, "joint speeds")
+        try:
+            lag_scale = float(lag_speed_scale)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("lag_speed_scale must be a finite number") from exc
+        if not np.isfinite(lag_scale) or not 0.0 <= lag_scale <= 1.0:
+            raise ValueError("lag_speed_scale must be finite and within [0, 1]")
         if np.any(speeds <= 0) or not all(
             np.isfinite(v) and v > 0 for v in (dt, max_linear_speed, max_angular_speed, max_joint_acceleration)
         ):
@@ -356,7 +392,7 @@ class DampedIK:
         damping = max(0.001, self.max_damping * severity)
         scale = max(self.min_speed_scale, 1 - severity)
 
-        def result(target, status, factor=0.0):
+        def result(target, status, factor=0.0, detail=""):
             xp, rp = self.forward(target)
             value = DampedStep(
                 np.asarray(target, dtype=float).copy(),
@@ -367,6 +403,7 @@ class DampedIK:
                 factor,
                 damping,
                 status,
+                detail,
             )
             if reset_cycle:
                 self.end_cycle()
@@ -374,7 +411,7 @@ class DampedIK:
 
         error = np.concatenate((xyz - origin, shortest_world_rotation_vector(orientation, quat)))
         if np.linalg.norm(error[:3]) < 1e-7 and np.linalg.norm(error[3:]) < 1e-6:
-            return result(q, "hold_at_target")
+            return result(q, "hold_at_target", detail="目标位姿已到达")
         # Common scale preserves the operator's six-dimensional direction.
         error *= min(
             1.0,
@@ -400,26 +437,47 @@ class DampedIK:
         velocity = old + np.clip(velocity - old, -max_joint_acceleration * dt, max_joint_acceleration * dt)
         velocity = np.clip(velocity, -speeds * scale, speeds * scale)
         delta = velocity * dt
+        # Tracking-allowance governor: one common factor preserves the commanded
+        # direction while bounding how far the command may lead the measured joints.
+        if lag_scale < 1.0:
+            delta = delta * lag_scale
+        effective_scale = scale * lag_scale
         limits = RM65_B_SPEC.joint_limit_rad
         lo, hi = limits[:, 0] + np.deg2rad(5), limits[:, 1] - np.deg2rad(5)
         if np.any((q < lo) & (delta < -1e-12)) or np.any((q > hi) & (delta > 1e-12)):
-            return result(q, "hold_joint_margin")
+            return result(q, "hold_joint_margin", detail="有轴已进入 5° 软限位余量")
         factors = (1.0, 0.5, 0.25, 0.125)[: self.max_candidate_attempts]
+        rejected = []
         for factor in factors:
             self._candidate_attempts += 1
-            self.check_budget("candidate search")
+            self.check_budget("候选搜索")
             candidate = np.deg2rad(np.round(np.rad2deg(q + delta * factor) * 1000) / 1000)
             if np.max(np.abs(candidate - q)) < 1e-10:
+                rejected.append("步长低于 0.001° 下发分辨率")
                 continue
             if np.any(candidate < limits[:, 0]) or np.any(candidate > limits[:, 1]):
+                rejected.append("关节硬限位")
                 continue
             if np.any((q >= lo) & (candidate < lo)) or np.any((q <= hi) & (candidate > hi)):
+                rejected.append("关节软限位余量")
                 continue
             if not self.bounded_path_allowed(q, candidate, ratio=ratio, angles=angles):
+                rejected.append("奇异路径守卫")
                 continue
             xp, rp = self.forward(candidate)
             achieved = np.concatenate(((xp - origin) / self.length, shortest_world_rotation_vector(orientation, rp)))
             if np.linalg.norm(error - achieved) > np.linalg.norm(error) + 1e-10:
+                rejected.append("可达误差反而变大")
                 continue
-            return result(candidate, "escaping" if improving and severity else "tracking", scale * factor)
-        return result(q, "hold_singularity")
+            return result(candidate, "escaping" if improving and severity else "tracking", effective_scale * factor)
+        if ratio <= self.stop_ratio and not np.any(angles <= self.stop_joint_rad):
+            context = f"奇异比 {ratio:.5f} ≤ 硬停线 {self.stop_ratio:g}：处于硬停区，无可用方向"
+        elif np.any(angles <= self.stop_joint_rad):
+            context = "J3/J5 处于 5° 硬区，且没有向外步"
+        else:
+            context = f"奇异比 {ratio:.5f} 高于硬停线 {self.stop_ratio:g}"
+        return result(
+            q,
+            "hold_singularity",
+            detail=context + ("" if not rejected else "；候选被拒：" + "；".join(dict.fromkeys(rejected))),
+        )

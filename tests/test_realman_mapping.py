@@ -138,9 +138,17 @@ def test_recommended_hardware_entrypoint_does_not_apply_an_extra_xy_inversion(mo
     assert captured["suppress_rotation_during_translation"] is False
     assert captured["move_v"] == 5
     assert captured["motion_command"] == "damped_ik_movej_follow"
-    assert captured["scale_factor"] == 0.25
+    assert captured["home_joint_deg"] == (0, 0, -60, 0, 60, 0)
+    assert captured["auto_home_on_start"] is True
+    # The fixed-Home path preflight is off by default: a start pose on the far side of a
+    # J3/J5 zero must not block the return.
+    assert captured["enable_home_path_preflight"] is False
+    assert captured["scale_factor"] == 1.0
     assert captured["rotation_scale_factor"] == 0.25
-    assert captured["max_offset_m"] == 0.03
+    # The per-Grip translation envelope is off at the hardware entry (the controller library
+    # still defaults to 0.15 m); pass --max-offset-m to restore the clip.
+    assert captured["max_offset_m"] is None
+    assert captured["motion_deadband_m"] == 0.0
     assert captured["max_rot_offset_rad"] == 0.20
     assert captured["max_linear_velocity_m_s"] == 0.05
     assert captured["max_angular_velocity_rad_s"] == 0.25
@@ -251,3 +259,19 @@ def test_hardware_cli_script_routes_to_safe_controller_without_motion(monkeypatc
         cli_targets[0].__globals__["RealmanRM65SafeTeleopController"]
         is hardware_entrypoint.RealmanRM65SafeTeleopController
     )
+
+
+def test_legacy_hardware_mode_keeps_startup_tcp_reset(monkeypatch):
+    captured = {}
+
+    class _Controller:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def run(self):
+            return None
+
+    monkeypatch.setattr(hardware_entrypoint, "RealmanRM65SafeTeleopController", _Controller)
+    hardware_entrypoint.main(motion_command="official_ik_movej_follow", enable_singularity_avoidance=False)
+    assert captured["home_joint_deg"] is None
+    assert captured["auto_home_on_start"] is False

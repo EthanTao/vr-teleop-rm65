@@ -42,8 +42,11 @@ ARM_PORT = 8080
 # 模式 → 容器内启动脚本
 MODE_SCRIPT: dict[str, str] = {
     "sim": "python scripts/simulation/teleop_rm65_sim.py",
+    # --log-motion-debug 让 dry run 打印「手柄位移 → 目标位姿 → DLS 关节目标」整条计算链，
+    # 否则只能看到机械臂自身状态（锚点/奇异比）。dry run 不下发运动，加日志无安全代价。
     "hardware-dry-run": (
-        "python scripts/hardware/teleop_realman_rm65_safe_hardware.py " "--arm-host {arm_host} --dry-run"
+        "python scripts/hardware/teleop_realman_rm65_safe_hardware.py "
+        "--arm-host {arm_host} --dry-run --log-motion-debug"
     ),
     "hardware": "python scripts/hardware/teleop_realman_rm65_safe_hardware.py --arm-host {arm_host}",
 }
@@ -112,6 +115,7 @@ def show_menu() -> Mode | None:
 
   [2] [CHECK] 真机 Dry Run（不运动）
       连接 RM65、检查 UDP 反馈并计算目标，但不下发运动目标
+      逐周期打印手柄位移 → 目标位姿 → DLS 关节目标的完整计算链
 
   [3] [HARD] 真机模式
       启动带 UDP 安全反馈的笛卡尔跟随控制，操控真实 RM65
@@ -605,16 +609,20 @@ def run_in_container(
     mode: Mode,
     home_joint_deg: list[float] | None = None,
     sim_ik_backend: str = "placo",
+    enable_home_path_preflight: bool = False,
 ) -> int:
     """前台运行容器内脚本。返回 exit code。"""
     script = MODE_SCRIPT[mode]
     if mode in {"hardware", "hardware-dry-run"}:
         script = script.format(arm_host=ARM_HOST)
+        # 真机入口默认关闭固定 Home 回位路径预检；这里仅在显式要求时恢复拒绝式预检。
+        if enable_home_path_preflight:
+            script = f"{script} --enable-home-path-preflight"
     elif mode == "sim":
         if home_joint_deg is None or len(home_joint_deg) != 6:
             raise ValueError("simulation requires six calibrated home joint angles")
-        if sim_ik_backend not in {"placo", "official"}:
-            raise ValueError("sim_ik_backend must be 'placo' or 'official'")
+        if sim_ik_backend not in {"placo", "official", "shared-dls"}:
+            raise ValueError("sim_ik_backend must be 'placo', 'official' or 'shared-dls'")
         joint_args = " ".join(format(value, ".10g") for value in home_joint_deg)
         script = f"{script} --home-joint-deg {joint_args} " f"--ik-backend {sim_ik_backend}"
 
@@ -701,9 +709,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--sim-ik-backend",
-        choices=["placo", "official"],
+        choices=["placo", "official", "shared-dls"],
         default="placo",
-        help="仿真 IK 后端；official 需要睿尔曼 API2 Python SDK",
+        help="仿真后端；official 需要 API2 SDK，shared-dls 还需要当前控制器 DH/工具帧快照",
+    )
+    parser.add_argument(
+        "--enable-home-path-preflight",
+        action="store_true",
+        help="真机模式恢复固定 Home 回位路径预检（默认关闭：起点在 J3/J5 零位另一侧也能回位）",
     )
     return parser.parse_args()
 
@@ -722,25 +735,14 @@ def check_prerequisites():
 
 
 def _resolve_sim_home_joint(home_joint_deg: list[float] | None) -> list[float]:
-    if home_joint_deg is not None:
-        return home_joint_deg
-    if not sys.stdin.isatty():
-        raise ValueError("--home-joint-deg is required for non-interactive simulation")
-    while True:
-        raw = input("输入已验证的 RM65 侧装 home joint（六个角度，单位 deg）: ").strip()
-        try:
-            values = [float(value) for value in raw.replace(",", " ").split()]
-        except ValueError:
-            values = []
-        if len(values) == 6:
-            return values
-        print("  [FAIL] 需要恰好六个数，例如: 0 -30 60 0 60 0")
+    return [0.0, 0.0, -60.0, 0.0, 60.0, 0.0] if home_joint_deg is None else home_joint_deg
 
 
 def run(
     mode_str: str,
     home_joint_deg: list[float] | None = None,
     sim_ik_backend: str = "placo",
+    enable_home_path_preflight: bool = False,
 ):
     """主流程编排"""
     global tunnel_process
@@ -790,6 +792,7 @@ def run(
         mode,
         home_joint_deg=home_joint_deg,
         sim_ik_backend=sim_ik_backend,
+        enable_home_path_preflight=enable_home_path_preflight,
     )
 
     # 5. 脚本退出后清理
@@ -804,6 +807,7 @@ def main():
         args.mode,
         home_joint_deg=args.home_joint_deg,
         sim_ik_backend=args.sim_ik_backend,
+        enable_home_path_preflight=args.enable_home_path_preflight,
     )
 
 

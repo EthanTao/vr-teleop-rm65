@@ -7,10 +7,12 @@ import meshcat.transformations as tf
 import numpy as np
 
 from xrobotoolkit_teleop.common.base_teleop_controller import BaseTeleopController
+from xrobotoolkit_teleop.simulation.ik_pipeline import SimIkPipeline, TargetRateLimiter
 from xrobotoolkit_teleop.simulation.joint_constraints import JointConstraints
 from xrobotoolkit_teleop.simulation.motion_filter import MotionFilter
 from xrobotoolkit_teleop.utils.geometry import (
     R_HEADSET_TO_WORLD,
+    quat_diff_as_angle_axis,
 )
 
 
@@ -20,7 +22,7 @@ class PlacoTeleopController(BaseTeleopController):
 
     Extends BaseTeleopController with:
     - MotionFilter (deadband + EMA) applied on delta before IK
-    - JointConstraints (limit clipping + velocity limiting) after IK solve
+    - SimIkPipeline: rate-limited task target, then JointConstraints after the solve
     - SmoothReset: B button smooth interpolation back to home joints
     """
 
@@ -50,8 +52,15 @@ class PlacoTeleopController(BaseTeleopController):
         smooth_alpha_pos: float = 0.35,
         smooth_alpha_rot: float = 0.3,
         # --- 关节约束 ---
-        enable_velocity_limit: bool = False,
-        max_joint_velocity: float = 3.0,
+        enable_velocity_limit: bool = True,
+        max_joint_velocity: float = 1.0,
+        max_joint_acceleration: float | None = None,
+        # --- 任务目标限速 ---
+        enable_target_rate_limit: bool = True,
+        max_target_linear_velocity_m_s: float = 0.25,
+        max_target_linear_acceleration_m_s2: float = 1.0,
+        max_target_angular_velocity_rad_s: float = 1.0,
+        max_target_angular_acceleration_rad_s2: float = 4.0,
         # --- 平滑复位 ---
         reset_duration_s: float = 3.0,
         # --- 自碰撞避免 ---
@@ -88,7 +97,19 @@ class PlacoTeleopController(BaseTeleopController):
             dt=self.dt,
             enable_velocity_limit=enable_velocity_limit,
             max_joint_velocity=max_joint_velocity,
+            max_joint_acceleration=max_joint_acceleration,
         )
+
+        # 任务目标限速：手柄小幅连续运动 → 目标小幅连续移动。
+        # 关闭时退化为旧行为（IK 任务直接收到滤波器输出）。
+        self._target_rate_limit_enabled = bool(enable_target_rate_limit)
+        self.target_limiter = TargetRateLimiter(
+            max_linear_velocity_m_s=max_target_linear_velocity_m_s,
+            max_linear_acceleration_m_s2=max_target_linear_acceleration_m_s2,
+            max_angular_velocity_rad_s=max_target_angular_velocity_rad_s,
+            max_angular_acceleration_rad_s2=max_target_angular_acceleration_rad_s2,
+        )
+        self._pipeline: dict[str, SimIkPipeline] = {}
 
         # --- 平滑复位状态 ---
         self._resetting = False
@@ -138,9 +159,14 @@ class PlacoTeleopController(BaseTeleopController):
         return delta_xyz, delta_rot
 
     def _on_grip_state_change(self, name: str, active: bool) -> None:
-        """重写基类钩子：grip 按下时重置滤波历史"""
+        """重写基类钩子：grip 状态变化时重置滤波与限速历史"""
         if active:
             self.motion_filter.reset()
+            self._pipeline.pop(name, None)
+        else:
+            pipeline = self._pipeline.pop(name, None)
+            if pipeline is not None:
+                pipeline.release()
 
     # ---- 仿真后端 ----
 
@@ -168,12 +194,117 @@ class PlacoTeleopController(BaseTeleopController):
         except RuntimeError as e:
             print(f"IK solver failed: {e}")
 
+    def _pipeline_for(self, name, config):
+        """每个手柄一个限速管线；首次激活时锚定到当前末端位姿。"""
+        pipeline = self._pipeline.get(name)
+        link_name = config["link_name"]
+        ee_xyz, ee_quat = self._get_link_pose(link_name)
+        if pipeline is None:
+            pipeline = SimIkPipeline(
+                dt=self.dt,
+                motion_filter=self.motion_filter,
+                joint_constraints=self.joint_constraints,
+                target_limiter=self.target_limiter,
+                position_control=self.effector_control_mode.get(name, "pose") == "position",
+            )
+            self._pipeline[name] = pipeline
+            pipeline.sync(self.placo_robot.state.q[7:], ee_xyz, ee_quat)
+        return pipeline, ee_xyz, ee_quat
+
     def _apply_joint_constraints(self):
         """对 IK 求解后的关节值做限位 + 速度限制"""
         q = self.placo_robot.state.q[7:]  # 去掉浮动基座 7 个虚拟关节
         q_safe = self.joint_constraints.apply(q)
         self.placo_robot.state.q[7:] = q_safe
         self.placo_robot.update_kinematics()
+
+    def _update_ik(self):
+        """基类管线，但把任务目标先过一层笛卡尔限速。
+
+        原来的实现对每个手柄直接把 ``ref_ee + filtered_delta`` 写进任务目标，滤波器在
+        死区附近的逐分量归零会让目标出现台阶；IK 求解结果又直接成为下一帧关节状态，
+        没有任何速度约束，于是目标台阶变成了关节跳变。这里改为：
+        手柄增量 → 滤波 → **限速后的任务目标** → IK → 关节限位/速度约束。
+        """
+        self._update_robot_state()
+        self.placo_robot.update_kinematics()
+
+        if self._debug_xr and time.time() - self._last_debug_t > 2.0:
+            self._last_debug_t = time.time()
+            for src_name, config in self.manipulator_config.items():
+                grip = self.xr_client.get_key_value_by_name(config["control_trigger"])
+                pose = self.xr_client.get_pose_by_name(config["pose_source"])
+                print(f"[XR] {src_name}: grip={grip:.2f} " f"pose_xyz={[round(p, 3) for p in pose[:3]]}")
+            lg = self.xr_client.get_key_value_by_name("left_grip")
+            rg = self.xr_client.get_key_value_by_name("right_grip")
+            if max(lg, rg) < self._grip_threshold and not self._grip_hint_shown:
+                print("[XR] 按住手柄侧边 Grip 键（握把）才能驱动机械臂，" f"当前阈值 {self._grip_threshold:.1f}")
+                self._grip_hint_shown = True
+
+        for src_name, config in self.manipulator_config.items():
+            xr_grip_val = self.xr_client.get_key_value_by_name(config["control_trigger"])
+            self.active[src_name] = xr_grip_val > self._grip_threshold
+
+            # Grip 边界触发数据记录器
+            if self.data_collector is not None:
+                self._handle_data_collector_grip(src_name)
+            # Grip 状态变更钩子（通知子类）: 在更新 _prev_grip_active 之前检查
+            if self.active[src_name] != self._prev_grip_active.get(src_name, False):
+                self._on_grip_state_change(src_name, self.active[src_name])
+            self._prev_grip_active[src_name] = self.active[src_name]
+
+            if self.active[src_name]:
+                pipeline, ee_xyz, ee_quat = self._pipeline_for(src_name, config)
+                if self.ref_ee_xyz[src_name] is None:
+                    print(f"{src_name} is activated.")
+                    self.ref_ee_xyz[src_name] = pipeline.reference_ee_xyz
+                    self.ref_ee_quat[src_name] = pipeline.reference_ee_quat
+
+                xr_pose = self.xr_client.get_pose_by_name(config["pose_source"])
+                delta_xyz, delta_rot = self._process_xr_pose(xr_pose, src_name)
+                if not self._target_rate_limit_enabled:
+                    delta_xyz, delta_rot = self.motion_filter.apply(delta_xyz, delta_rot)
+                    self._write_task_target(src_name, config, *self._unlimited_target(
+                        src_name, delta_xyz, delta_rot, ee_xyz, ee_quat
+                    ))
+                else:
+                    target = pipeline.step(delta_xyz, delta_rot, ee_xyz, ee_quat)
+                    self._write_task_target(src_name, config, *target)
+
+                if self.data_collector is not None:
+                    filtered_xyz = pipeline.telemetry.get("filtered_delta_xyz", delta_xyz)
+                    filtered_rot = pipeline.telemetry.get("filtered_delta_rot", delta_rot)
+                    self._record_data_step(src_name, config, filtered_xyz, filtered_rot, xr_grip_val)
+            else:
+                if self.ref_ee_xyz[src_name] is not None:
+                    print(f"{src_name} is deactivated.")
+                    self.ref_ee_xyz[src_name] = None
+                    self.ref_controller_xyz[src_name] = None
+
+        # Process motion tracker data
+        self._update_motion_tracker_tasks()
+
+    def _unlimited_target(self, name, delta_xyz, delta_rot, ee_xyz, ee_quat):
+        """旧行为（--no-enable-target-rate-limit）：滤波后的增量直接进任务目标。"""
+        from xrobotoolkit_teleop.utils.geometry import apply_delta_pose
+
+        if self.effector_control_mode.get(name, "pose") == "position":
+            return self.ref_ee_xyz[name] + delta_xyz, np.asarray(ee_quat, dtype=float)
+        return apply_delta_pose(self.ref_ee_xyz[name], self.ref_ee_quat[name], delta_xyz, delta_rot)
+
+    def _write_task_target(self, name, config, target_xyz, target_quat_wxyz):
+        if target_xyz is None or target_quat_wxyz is None:
+            return
+        if self.effector_control_mode[name] == "position":
+            self.effector_task[name].target_world = np.asarray(target_xyz, dtype=float)
+            return
+        target_pose = tf.quaternion_matrix(np.asarray(target_quat_wxyz, dtype=float))
+        target_pose[:3, 3] = np.asarray(target_xyz, dtype=float)
+        self.effector_task[name].T_world_frame = target_pose
+
+    def _finalize_ik(self):
+        """IK 求完之后再过关节限位/速度约束，并写回显示状态。"""
+        self._apply_joint_constraints()
 
     # ---- 平滑复位 ----
 
@@ -204,6 +335,22 @@ class PlacoTeleopController(BaseTeleopController):
             self._reset_step += 1
 
         self._apply_joint_constraints()  # 内部已调用 update_kinematics
+        if not self._resetting:
+            # The reset ends at a pose the arm reached by interpolation; the velocity limiter
+            # must re-anchor there or the first IK cycle would be measured against the previous
+            # interpolation step.
+            self._reanchor_after_reset()
+
+    def _reanchor_after_reset(self):
+        self.joint_constraints.sync(self.placo_robot.state.q[7:])
+        for name, config in self.manipulator_config.items():
+            pipeline = self._pipeline.get(name)
+            if pipeline is None:
+                continue
+            ee_xyz, ee_quat = self._get_link_pose(config["link_name"])
+            pipeline.sync(self.placo_robot.state.q[7:], ee_xyz, ee_quat)
+            self.ref_ee_xyz[name] = pipeline.reference_ee_xyz
+            self.ref_ee_quat[name] = pipeline.reference_ee_quat
 
     # ---- 复位状态可视化 ----
 
@@ -302,9 +449,9 @@ class PlacoTeleopController(BaseTeleopController):
                     self._tick_smooth_reset()
                 else:
                     # 正常 IK 管线
-                    self._update_ik()  # 基类：读 XR → 算 delta → 更新 task
+                    self._update_ik()  # 读 XR → 算 delta → 限速任务目标
                     self._solve_ik()  # IK 求解
-                    self._apply_joint_constraints()  # 限位 + 速度限制
+                    self._finalize_ik()  # 关节限位 + 速度/加速度约束
 
                 self._send_command()  # Meshcat 显示
                 end_time = time.time()

@@ -26,7 +26,8 @@ python scripts/simulation/teleop_rm65_sim.py --home-joint-deg J1 J2 J3 J4 J5 J6 
 # 真机运行
 python scripts/hardware/teleop_realman_rm65_safe_hardware.py --arm-host 192.168.10.18
 
-# 真机参数示例：B 键返回启动时记录的 TCP 姿态
+# 真机参数示例：B 键返回固定六轴 Home [0, 0, -60, 0, 60, 0]
+# 回位路径预检默认关闭（起点在 J3/J5 零位另一侧也能回位）；加 --enable-home-path-preflight 恢复拒绝式预检
 python scripts/hardware/teleop_realman_rm65_safe_hardware.py --arm-host 192.168.10.18 --reset-button B --reset-duration-s 3.0
 
 # 可选：官方连续 IK dry-run（需官方 API2 SDK、坐标系实测确认、J3 非零软限位）
@@ -98,7 +99,7 @@ RM65 实时 UDP → 关节速度/限位/错误/跟踪误差 → 软停止或硬�
 
 | 文件 | 用途 |
 |------|------|
-| `simulation/teleop_rm65_sim.py` | 仿真主入口（`--ik-backend placo|official`，含滤波/约束/复位参数） |
+| `simulation/teleop_rm65_sim.py` | 仿真主入口（`--ik-backend` 选择 `placo` / `official` / `shared-dls`，不同后端的参数边界见仿真操作手册） |
 | `hardware/teleop_realman_rm65_safe_hardware.py` | **真机推荐入口**，tyro CLI |
 | `hardware/teleop_realman_rm65_hardware.py` | 旧版单文件入口；真机运动已禁用，仅保留 dry-run 诊断 |
 | `hardware/validate_realman_rm65_urdf.py` | URDF FK 与控制器姿态对比验证 |
@@ -142,15 +143,15 @@ ssh -N -o ExitOnForwardFailure=yes -L 18081:127.0.0.1:7000 -L 63901:127.0.0.1:63
 
 代码同步流程：本地 → `rsync`/`scp` → 板子宿主机 → `docker cp` → 容器内 `/workspace/`。推荐直接用 `python teleop.py --mode sync-only`。
 
-## 文档地图（2026-09-23 整理后）
+## 文档地图（2026-09-26 更新）
 
-`docs/` 下只有 5 篇核心文档，历史全文在 `docs/archive/`：
+完整导航见 `docs/README.md`。`docs/` 根目录维护 5 篇核心文档、近期工作日志与索引；历史工程文档在 `docs/archive/`，研究报告与导师版 Word 集中在 `docs/research/`，原始分题草稿在 `docs/research/drafts/`：
 
 | 文档 | 用途 |
 | --- | --- |
 | `docs/项目交接.md` | **系统全貌**：设计原则、运行环境、架构与仿真/真机一致性边界、可复现流程、代码入口职责、下一步优先级 |
 | `docs/仿真操作手册.md` | 仿真上手、操作、调参、FAQ、仿真参数速查 |
-| `docs/真机安全与故障处理.md` | DLS 控制链、风险判据、解锁四步、真机参数速查、验证顺序、上机自检清单 |
+| `docs/真机安全与故障处理.md` | DLS 控制链、风险判据、Grip 重新使能、真机参数速查、验证顺序、上机自检清单 |
 | `docs/RM65参数与坐标系.md` | RM65 本体参数、MDH 警示、奇异点分类、XR SDK 坐标系语义、侧装矩阵、Meshcat 轴色、逐轴实测记录 |
 | `docs/决策与结论汇总.md` | 全部历史日志/specs/plans 的结论集 + **⚠️ 已废弃/被推翻结论清单**；改动前先读 §4 |
 | `docs/plans/2026.9.22-降低每周期FK调用.md` | DLS 性能历史提案；bounded-search 已落地并通过目标容器 1000 周期 Dry Run 时序验证，真实运动待验收 |
@@ -163,15 +164,15 @@ ssh -N -o ExitOnForwardFailure=yes -L 18081:127.0.0.1:7000 -L 63901:127.0.0.1:63
 2. **URDF FK 与真机偏差大**：官方 IK 仿真以官方 FK 建立锚点，URDF/Placo wrapper 只显示关节构型；真机仍依赖控制器报告的 TCP 位姿。不要用 Meshcat 中的 URDF 末端坐标替代控制器 TCP 坐标。
 3. **侧装**：旋转矩阵与桌面安装的 UR5 不同，调整前先确认安装方式。
 4. **位置姿态同步跟随**：默认 `suppress_rotation_during_translation=False`、`freeze_rotation=False`。平移时抑制旋转仅作为显式选项，不因连续 IK 优化而默认开启。
-5. `config/*.json` 暂未被代码加载，需手动传入参数。
+5. `config/realman_rm65_side_mount_teleop.json` 是未自动加载的参考参数，需手动传入 CLI；`config/rm65_dls_calibration.json` 是 shared-dls 会读取的控制器 DH/工具帧快照，已被 Git 忽略，两者用途不同。
 6. **自碰撞避免默认关闭**（`enable_self_collision_avoidance=False`），需显式开启。开启后 IK 求解器增加不等式约束，可能轻微影响跟踪精度。
 7. **运行时调参**仅 Linux TTY 环境可用（Docker 内 `docker exec -it`），Windows 下 `select` 不适用。在容器内用 `--enable-tuning` 开启后按键盘 `d/r/a/o` 调整参数。
 8. **`meshcat.geometry.Label` 不存在于已发布版本**（0.3.2 及之前均无）。`placo_teleop_controller.py` 中已移除相关调用，改用球体指示灯（绿=就绪/橙=复位中）替代文字标签。若升级 meshcat 版本后 `Label` 类可用，可重新添加——但需同时兼容旧版本，或用 try/except 兜底。
 
-9. **真机安全停止**：推荐控制器默认 `move_v=5`、TCP 线速度 `0.05 m/s`、角速度 `0.25 rad/s`，每周期先过速度/加速度限制器。实时 UDP 反馈必须包含 `joint_speed`；反馈超时、关节超速/越界、控制器错误、跟踪误差、XR 超时/跳变或 TCP 边界违规都会硬停止并锁存。故障后必须松开 Grip，待反馈新鲜且各关节低于 `1 deg/s`，再按 B 解锁；正常松 Grip 使用软停止。旧单文件入口禁止真机运动。该保护不等价于碰撞检测或现场安全认证，首次上机仍须从当前默认的收紧幅度（平移/旋转比例 `0.25`、单次 Grip 包络 `--max-offset-m 0.03` / `--max-rot-offset-rad 0.20`）起验证，确认平稳后再逐项放宽。
+9. **真机安全停止**：推荐控制器默认 `move_v=5`、TCP 线速度 `0.05 m/s`、角速度 `0.25 rad/s`，每周期先过速度/加速度限制器。实时 UDP 反馈必须包含 `joint_speed`；反馈超时、关节超速/越界、控制器错误、跟踪误差、XR 超时/跳变或 TCP 边界违规都会硬停止并锁存。故障后松开 Grip，待反馈新鲜且各关节低于 `1 deg/s` 即重新使能；若故障时 Grip 已松开，需先扣住再松开一次。B 键只负责固定 Home 复位；正常松 Grip 使用软停止。旧单文件入口禁止真机运动。该保护不等价于碰撞检测或现场安全认证，当前按用户要求将平移映射改为 1:1，平移死区为 0，单次 Grip 平移包络入口默认**不设限**（真机入口 `--max-offset-m` 默认 `None`，控制器库默认仍为 `0.15`；2026-09-26 用户要求取消）；旋转比例仍为 `0.25`、旋转包络仍为 `--max-rot-offset-rad 0.20`。取消包络后，一段 Grip 仍受 TCP 工作空间盒（每轴 `±1.0 m`，应按现场收窄）、XR 单帧跳变门槛、关节限位/超速与跟随余量限制，失去的是单段累计漂移上限。首次真机验收仍须低速、小位移、净空与急停就绪，可显式收紧 `--max-offset-m 0.03`。
 
 10. **代码改动须记入工作日志**：每次修改代码（新增功能、修 bug、临时调试开关等），都要在 `docs/` 下按日期命名的工作日志（如 `docs/2026.9.23.md`）追加记录，包含日期、修改文件、背景/原因、改动内容、验证状态。先记日志再视为完成。（旧的 `docs/modification-log.md` 已于 2026-09-09 停用，现归档在 `docs/archive/`。）
-11. **仿真与真机代码并行维护**：两端共用 XR 映射和 `hardware/realman_official_ik.py` 适配器。修改时同步检查映射、锚点、周期、seed、边界和 J3 保护。2026-09-19 起真机使用 `hardware/damped_ik.py`，仿真仍为 Placo / 官方连续 IK，尚未接入新 DLS 后端；不能声称两端运动算法相同。旧 `hardware/singularity_avoidance.py` 仅供离线结构分析，不能用其 URDF 雅可比批准真机 TCP 运动。详见 `docs/真机安全与故障处理.md`。
+11. **仿真与真机代码并行维护**：两端共用 XR 映射和 `hardware/realman_official_ik.py` 适配器。修改时同步检查映射、锚点、周期、seed、边界和 J3 保护。2026-09-19 起真机使用 `hardware/damped_ik.py`，仿真默认仍为 Placo / 官方连续 IK；显式选择 shared-dls 时调用同一 RM65ControlCore 与 DLS 准入链，并从控制器快照加载 DH/工具帧。虚拟反馈立即跟随已接受命令，不能据此声称真机执行效果相同。旧 `hardware/singularity_avoidance.py` 仅供离线结构分析，不能用其 URDF 雅可比批准真机 TCP 运动。详见 `docs/真机安全与故障处理.md`。
 12. **仿真映射必须符合人体直觉**：仿真是手感标定场，仿真入口的映射关系是「直觉参考系」（手柄上抬→工具端升高、前推→伸远、右推→向右，按真实侧装语境验收），不能用真机适配矩阵反向定义仿真手感。真机矩阵修正（`_HARDWARE`、`invert_tcp_xy`）只是把这份直觉搬运到物理机器上。仿真矩阵的选择以逐轴实测为准（判定表见 `docs/RM65参数与坐标系.md` §14）；任何让仿真映射偏离直觉的改动视为问题。
 
 ## 2026-09-16 代码整理

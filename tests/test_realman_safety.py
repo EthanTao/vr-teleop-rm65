@@ -73,7 +73,7 @@ def test_workspace_guard_rejects_target_outside_axis_bounds():
     within_bounds, reason = arm._pose_is_within_bounds(np.array([0.5, 0.0, 0.0]))
 
     assert not within_bounds
-    assert "bounds" in reason
+    assert "超出配置的边界" in reason
 
 
 def test_controller_false_response_is_an_error():
@@ -198,7 +198,7 @@ def test_movep_follow_transport_failure_latches_fault_and_stops():
 
     assert not sent
     assert arm.fault_latched
-    assert "transport failed" in arm.fault_reason
+    assert "通信失败" in arm.fault_reason
 
 
 def test_movej_follow_converts_radians_to_controller_millidegrees():
@@ -228,7 +228,7 @@ def test_movej_follow_transport_failure_latches_fault_and_stops():
 
     assert not sent
     assert arm.fault_latched
-    assert "movej_follow transport failed" in arm.fault_reason
+    assert "movej_follow 通信失败" in arm.fault_reason
 
 
 def _patch_identity_quaternion_ops(monkeypatch):

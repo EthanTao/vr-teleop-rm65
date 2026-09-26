@@ -42,8 +42,15 @@ class RealmanOfficialIKSimulationController(PlacoTeleopController):
             raise ValueError("official RM65 simulation requires exactly one manipulator")
         if kwargs.get("enable_self_collision_avoidance", False):
             raise ValueError("Placo self-collision tasks are unavailable with the official IK backend")
-        if kwargs.get("enable_velocity_limit", False):
+        # The official IK path brings its own per-cycle step guard and its own target from the
+        # controller frames, so the Placo-only joint/target limiters stay off here by default.
+        # They remain opt-in and are still rejected when explicitly requested.
+        kwargs.setdefault("enable_velocity_limit", False)
+        kwargs.setdefault("enable_target_rate_limit", False)
+        if kwargs["enable_velocity_limit"]:
             raise ValueError("use official_ik_max_joint_speed_ratio instead of the Placo velocity limiter")
+        if kwargs["enable_target_rate_limit"]:
+            raise ValueError("use official_ik_max_joint_speed_ratio instead of the Placo target rate limiter")
         self.joint_guard = OfficialIKSimulationGuard(
             j3_exclusion_deg=official_ik_j3_exclusion_deg,
             max_joint_speed_ratio=official_ik_max_joint_speed_ratio,

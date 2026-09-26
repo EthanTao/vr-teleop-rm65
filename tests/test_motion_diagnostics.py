@@ -199,7 +199,7 @@ def test_self_test_keeps_tracking_error_guard(monkeypatch):
     arm.pose6_to_xyz_quat = lambda pose: (np.array([0.6, 0, 0.5]), np.array([1.0, 0, 0, 0]))
     monkeypatch.setattr(controller_module, "quat_diff_as_angle_axis", lambda a, b: np.zeros(3))
     c._run_cycle(1.0)
-    assert "tracking error" in arm.fault_reason
+    assert "跟踪误差超限" in arm.fault_reason
     assert not arm.movep_follow_commands
 
 

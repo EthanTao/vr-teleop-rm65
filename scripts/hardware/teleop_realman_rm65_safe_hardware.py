@@ -11,14 +11,14 @@ def main(
     arm_host: str = "192.168.10.18",
     arm_port: int = 8080,
     pose_source: str = "right",
-    scale_factor: float = 0.25,
+    scale_factor: float = 1.0,
     rotation_scale_factor: float = 0.25,
     control_rate_hz: float = 50.0,
     move_v: int = 5,
     move_r: int = 80,
-    max_offset_m: float = 0.03,
+    max_offset_m: float | None = None,
     max_rot_offset_rad: float = 0.20,
-    motion_deadband_m: float = 0.003,
+    motion_deadband_m: float = 0.0,
     rot_deadband_rad: float = 0.04,
     grip_on_threshold: float = 0.2,
     grip_off_threshold: float = 0.15,
@@ -30,6 +30,10 @@ def main(
     log_motion_debug: bool = False,
     reset_button: str = "B",
     reset_duration_s: float = 3.0,
+    home_joint_deg: tuple[float, float, float, float, float, float] = (0, 0, -60, 0, 60, 0),
+    auto_home_on_start: bool = True,
+    home_joint_tolerance_deg: float = 1.0,
+    enable_home_path_preflight: bool = False,
     xr_watchdog_timeout_s: float = 0.20,
     max_tracking_error_m: float = 0.12,
     max_tracking_error_rad: float = 0.80,
@@ -55,6 +59,8 @@ def main(
     rotation_full_gain_linear_speed_m_s: float = 0.05,
     rotation_zero_gain_linear_speed_m_s: float = 0.25,
     max_joint_speed_ratio: float = 0.10,
+    max_tracking_lag_cycles: float = 3.0,
+    tracking_lag_hold_dwell_s: float = 0.3,
     rearm_stationary_speed_rad_s: float = math.radians(1.0),
     enable_singularity_avoidance: bool = True,
     singularity_slowdown_ratio: float = 0.04,
@@ -83,9 +89,56 @@ def main(
     This is the recommended hardware entry. It uses independent UDP feedback,
     bounded velocity/acceleration commands, overspeed latching, and explicit re-arm.
 
-    Use --dry-run --log-motion-debug to preview controller deltas, target poses,
-    limited command poses and actual UDP positions at up to 5 Hz without sending motion.
+    Use --dry-run --log-motion-debug to print, at up to 5 Hz and without sending motion,
+    the whole chain: mapped hand delta, scaled/bounded target, limited command, UDP
+    measurement, the DLS singularity verdict, and the computed joint target. The
+    one-click launcher enables this preview for its dry-run mode.
+
+    Fixed-Home return (B button and --auto-home-on-start) does not require the arm to
+    start on the Home side of the J3/J5 zero: with --no-enable-home-path-preflight
+    (the default here) the trip is sent as a joint-space interpolation and the sampled
+    J3/J5 crossing, singularity and TCP-workspace verdicts become console warnings
+    instead of refusals. Pass --enable-home-path-preflight to restore the hard
+    preflight, which refuses any reset whose straight joint path crosses a zero.
+    Either way the operator still confirms that the whole path is clear before a
+    reset starts; the preflight is not collision detection.
+
+    The per-Grip translation envelope is off by default here (--max-offset-m defaults to
+    None instead of the controller's 0.15 m): the mapped hand offset is added to the
+    anchor pose as-is. What still bounds one segment is the TCP workspace box (1 m per
+    axis unless --workspace-min/max-xyz-m narrows it), the XR single-frame jump gate
+    (--max-xr-step-m / --max-xr-rot-step-rad), the joint limit/overspeed gates and the
+    tracking-lag allowance. The rotation envelope (--max-rot-offset-rad) is unchanged.
+    Pass --max-offset-m 0.15 (or 0.03 for a first live run) to restore the clip.
+
+    Two separate budgets decide admission. The adjacent-command step keeps the original
+    one-control-period budget (180 deg/s x 10% x 20 ms = 0.360 deg on J1/J2). The lead of
+    the command over the UDP-measured joints gets --max-tracking-lag-cycles periods
+    (default 3 -> 1.080 deg), because it has to absorb the servo/transport delay measured on
+    site (up to 48 ms) and is not a joint speed. Inside that allowance the command slows
+    down in proportion to the lead; at the hold line the stream freezes and recovers by
+    itself once the arm catches up. Only a lead that keeps degrading for
+    --tracking-lag-hold-dwell-s, or a command stream that cannot advance at all while the
+    governor is active, latches a fault.
+
+    The DLS per-joint speed limit is the model limit times --max-joint-speed-ratio
+    (J1/J2 = 18 deg/s, J3-J6 = 22.5 deg/s) with no further shrink: speed scale 1. The lead
+    allowance is the separate budget described above and is not folded into that limit, so
+    the Cartesian velocity cap and the governor are what actually bound a fast command.
     """
+    fixed_home_enabled = not self_test_ramp and motion_command == "damped_ik_movej_follow"
+    if not self_test_ramp and not fixed_home_enabled:
+        print("[HOME] fixed joint home is available only in DLS mode; legacy mode keeps startup TCP reset")
+    if fixed_home_enabled and not enable_home_path_preflight:
+        print(
+            "[HOME] 固定六轴 Home 回位路径预检已关闭：起点在 J3/J5 零位另一侧时也能回位，"
+            "回位按关节空间插值直发；重新开启请加 --enable-home-path-preflight"
+        )
+    if max_offset_m is None:
+        print(
+            "[SAFETY] 单次 Grip 平移包络已取消：手柄位移 1:1 直接进目标，只受 TCP 工作空间盒、"
+            "XR 单帧跳变门槛、关节限位/超速与跟随余量限制；重新开启请加 --max-offset-m 0.15"
+        )
     controller = RealmanRM65SafeTeleopController(
         arm_host=arm_host,
         arm_port=arm_port,
@@ -110,6 +163,10 @@ def main(
         log_motion_debug=log_motion_debug,
         reset_button=reset_button,
         reset_duration_s=reset_duration_s,
+        home_joint_deg=home_joint_deg if fixed_home_enabled else None,
+        auto_home_on_start=auto_home_on_start and fixed_home_enabled,
+        home_joint_tolerance_deg=home_joint_tolerance_deg,
+        enable_home_path_preflight=enable_home_path_preflight,
         xr_watchdog_timeout_s=xr_watchdog_timeout_s,
         max_tracking_error_m=max_tracking_error_m,
         max_tracking_error_rad=max_tracking_error_rad,
@@ -135,6 +192,8 @@ def main(
         rotation_full_gain_linear_speed_m_s=rotation_full_gain_linear_speed_m_s,
         rotation_zero_gain_linear_speed_m_s=rotation_zero_gain_linear_speed_m_s,
         max_joint_speed_ratio=max_joint_speed_ratio,
+        max_tracking_lag_cycles=max_tracking_lag_cycles,
+        tracking_lag_hold_dwell_s=tracking_lag_hold_dwell_s,
         rearm_stationary_speed_rad_s=rearm_stationary_speed_rad_s,
         enable_singularity_avoidance=enable_singularity_avoidance,
         singularity_slowdown_ratio=singularity_slowdown_ratio,

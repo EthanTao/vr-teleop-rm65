@@ -61,7 +61,7 @@ def test_reset_and_rearm_cycles_are_logged_without_stale_commands(tmp_path, monk
     c._start_reset(receiver.feedback)
     c._run_cycle(1.0)
     c._resetting = False
-    c._enter_rearm(require_button=True)
+    c._enter_rearm()
     c._run_cycle(1.0)
     c._motion_log.close()
     rows = [json.loads(line) for line in path.read_text().splitlines()]

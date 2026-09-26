@@ -142,7 +142,7 @@ def _controller(feedback, **kwargs):
     return controller, arm, receiver
 
 
-def test_joint_overspeed_latches_fault_and_requires_button_rearm():
+def test_joint_overspeed_latches_fault_and_requires_grip_release():
     speed = np.zeros(6)
     speed[0] = np.deg2rad(19.0)
     controller, arm, _ = _controller(_feedback(joint_speed_rad_s=speed))
@@ -151,9 +151,9 @@ def test_joint_overspeed_latches_fault_and_requires_button_rearm():
 
     assert result is None
     assert arm.fault_latched
-    assert "J1 overspeed" in arm.fault_reason
+    assert "J1 关节超速" in arm.fault_reason
     assert controller._rearm_required
-    assert controller._rearm_button_required
+    assert not controller._rearm_seen_pressed
 
 
 def test_stale_udp_feedback_latches_fault_fail_closed():
@@ -163,28 +163,60 @@ def test_stale_udp_feedback_latches_fault_fail_closed():
 
     assert result is None
     assert arm.fault_latched
-    assert "feedback stale" in arm.fault_reason
+    assert "反馈已过期" in arm.fault_reason
 
 
-def test_fault_rearm_requires_release_then_button_and_stationary_feedback():
+def test_fault_rearm_requires_grip_release_and_stationary_feedback():
     controller, arm, receiver = _controller(_feedback())
+    controller.grip_active = True
     controller._latch_safety_fault("test fault")
 
-    controller._handle_rearm(grip=1.0, reset_edge=True, now=1.0)
+    controller._handle_rearm(grip=1.0, now=1.0)
     assert arm.clear_calls == 0
 
-    controller._handle_rearm(grip=0.0, reset_edge=False, now=1.0)
     moving = np.zeros(6)
     moving[0] = np.deg2rad(2.0)
     receiver.feedback = _feedback(joint_speed_rad_s=moving)
-    controller._handle_rearm(grip=0.0, reset_edge=True, now=1.0)
+    controller._handle_rearm(grip=0.0, now=1.0)
     assert arm.clear_calls == 0
 
     receiver.feedback = _feedback(joint_speed_rad_s=np.zeros(6))
-    controller._handle_rearm(grip=0.0, reset_edge=True, now=1.0)
-
+    controller._handle_rearm(grip=0.0, now=1.0)
     assert arm.clear_calls == 1
     assert not controller._rearm_required
+
+
+def test_fault_while_grip_is_released_requires_a_new_press_and_release():
+    controller, arm, _ = _controller(_feedback())
+    controller._latch_safety_fault("test fault")
+    controller._handle_rearm(grip=0.0, now=1.0)
+    assert arm.fault_latched
+    controller._handle_rearm(grip=1.0, now=1.0)
+    assert arm.fault_latched
+    controller._handle_rearm(grip=0.0, now=1.0)
+    assert not arm.fault_latched
+
+
+def test_duplicate_rearm_entry_keeps_release_observation():
+    controller, arm, _ = _controller(_feedback())
+    controller.grip_active = True
+    controller._latch_safety_fault("test fault")
+    controller._enter_rearm()  # A failed send can report the same latched fault again.
+    assert controller._rearm_seen_pressed
+    controller._handle_rearm(grip=0.0, now=1.0)
+    assert not arm.fault_latched
+
+
+def test_b_is_ignored_while_fault_rearm_is_pending():
+    controller, arm, _ = _controller(_feedback())
+    controller.grip_active = True
+    controller._latch_safety_fault("test fault")
+    controller._read_control_state = lambda: (0.0, True)
+    reset_calls = []
+    controller._start_reset = lambda feedback: reset_calls.append(feedback)
+    controller._run_teleop_cycle(1.0)
+    assert reset_calls == []
+    assert not arm.fault_latched
 
 
 def test_rotation_scale_factor_reduces_xr_rotation(monkeypatch):
@@ -212,6 +244,48 @@ def test_rotation_scale_factor_reduces_xr_rotation(monkeypatch):
 
     _, delta_rot = controller._process_xr_pose(controller.xr.pose)
     np.testing.assert_allclose(delta_rot, [0.2, 0.0, 0.0])
+
+
+def test_default_translation_mapping_is_one_to_one_through_15_cm(monkeypatch):
+    controller, _, _ = _controller(_feedback(), use_headset_world_transform=False)
+    controller.ref_ctrl_xyz = np.zeros(3)
+    controller.ref_ctrl_quat = np.array([1.0, 0.0, 0.0, 0.0])
+    monkeypatch.setattr(
+        safe_controller_module.tf,
+        "quaternion_from_matrix",
+        lambda matrix: np.array([1.0, 0.0, 0.0, 0.0]),
+        raising=False,
+    )
+    monkeypatch.setattr(safe_controller_module.tf, "quaternion_multiply", lambda left, right: right, raising=False)
+    monkeypatch.setattr(safe_controller_module.tf, "quaternion_conjugate", lambda quat: quat, raising=False)
+    monkeypatch.setattr(safe_controller_module, "quat_diff_as_angle_axis", lambda source, target: np.zeros(3))
+
+    for hand_m, expected_m in ((0.001, 0.001), (0.0741, 0.0741), (0.15, 0.15), (0.20, 0.15)):
+        pose = np.array([hand_m, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+        delta_xyz, _ = controller._process_xr_pose(pose)
+        np.testing.assert_allclose(delta_xyz, [expected_m, 0.0, 0.0], atol=1e-12)
+
+
+def test_disabled_translation_envelope_passes_the_hand_offset_through(monkeypatch):
+    controller, _, _ = _controller(_feedback(), use_headset_world_transform=False, max_offset_m=None)
+    controller.ref_ctrl_xyz = np.zeros(3)
+    controller.ref_ctrl_quat = np.array([1.0, 0.0, 0.0, 0.0])
+    monkeypatch.setattr(
+        safe_controller_module.tf,
+        "quaternion_from_matrix",
+        lambda matrix: np.array([1.0, 0.0, 0.0, 0.0]),
+        raising=False,
+    )
+    monkeypatch.setattr(safe_controller_module.tf, "quaternion_multiply", lambda left, right: right, raising=False)
+    monkeypatch.setattr(safe_controller_module.tf, "quaternion_conjugate", lambda quat: quat, raising=False)
+    monkeypatch.setattr(safe_controller_module, "quat_diff_as_angle_axis", lambda source, target: np.zeros(3))
+
+    for hand_m in (0.001, 0.15, 0.20, 0.60):
+        pose = np.array([hand_m, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+        delta_xyz, _ = controller._process_xr_pose(pose)
+        np.testing.assert_allclose(delta_xyz, [hand_m, 0.0, 0.0], atol=1e-12)
+
+    assert controller.max_offset_m is None
 
 
 def test_grip_release_uses_slow_stop_instead_of_hard_stop():
@@ -267,7 +341,7 @@ def test_xr_single_frame_jump_hard_stops_and_clears_active_grip():
     controller._run_cycle(1.0)
 
     assert arm.latch_calls == 1
-    assert "XR pose jump" in arm.fault_reason
+    assert "单帧跳变超限" in arm.fault_reason
     assert controller._rearm_required
     assert not controller.grip_active
 
@@ -315,7 +389,7 @@ def test_official_ik_failure_latches_fault_without_sending_joint_target():
 
     assert not sent
     assert arm.fault_latched
-    assert "official RM65 IK failed" in arm.fault_reason
+    assert "官方 RM65 IK 求解失败" in arm.fault_reason
     assert arm.movej_follow_commands == []
 
 
@@ -338,7 +412,7 @@ def test_official_ik_joint_step_limit_fails_closed():
 
     assert not sent
     assert arm.fault_latched
-    assert "J1 step exceeded limit" in arm.fault_reason
+    assert "官方 RM65 IK J1 单步超限" in arm.fault_reason
     assert arm.movej_follow_commands == []
 
 
@@ -568,3 +642,56 @@ def test_singularity_avoidance_can_be_disabled_explicitly(monkeypatch):
     assert controller.limiter.speed_scale == 1.0
     assert not controller._singularity_hold
     assert arm.latch_calls == 0
+
+
+# --- command reference across motion segments ------------------------------------------------
+
+
+def _stale_command_reference(arm, xyz=np.array([0.6, 0.0, 0.5])):
+    """Make the controller believe it last commanded a pose far from the measured one."""
+    arm.get_last_commanded_pose6 = lambda: [1] * 6
+    arm.pose6_to_xyz_quat = lambda pose: (np.asarray(xyz, dtype=float), np.array([1.0, 0.0, 0.0, 0.0]))
+
+
+def test_first_grip_re_anchors_instead_of_faulting_on_a_stale_reference(monkeypatch):
+    """After a fault, re-arm, pendant jog or drag the arm is legitimately elsewhere, and the
+    new segment has commanded nothing yet, so its first cycle must re-anchor from measurement."""
+    feedback = _feedback()
+    controller, arm, _ = _controller(feedback)
+    _stale_command_reference(arm)
+    monkeypatch.setattr(safe_controller_module, "quat_diff_as_angle_axis", lambda a, b: np.zeros(3))
+    controller.xr.grip = 1.0
+    controller.xr.timestamp_ns = 2
+
+    controller._run_teleop_cycle(1.0)
+
+    assert arm.latch_calls == 0
+    assert controller.grip_active
+    np.testing.assert_allclose(controller.ref_arm_xyz, feedback.tcp_xyz_m)
+
+
+def test_active_segment_still_latches_a_tracking_error(monkeypatch):
+    """Skipping the check on the anchoring cycle must not disarm the guard while commanding."""
+    feedback = _feedback()
+    controller, arm, _ = _controller(feedback)
+    _stale_command_reference(arm)
+    monkeypatch.setattr(safe_controller_module, "quat_diff_as_angle_axis", lambda a, b: np.zeros(3))
+    controller.grip_active = True
+    controller.xr.grip = 1.0
+    controller.xr.timestamp_ns = 2
+
+    controller._run_teleop_cycle(1.0)
+
+    assert arm.fault_latched
+    assert "跟踪误差超限" in arm.fault_reason
+
+
+def test_reset_start_replaces_the_previous_command_reference():
+    feedback = _feedback()
+    controller, arm, _ = _controller(feedback)
+    controller.home_xyz = feedback.tcp_xyz_m.copy()
+    controller.home_quat = feedback.tcp_quat_wxyz.copy()
+
+    controller._start_reset(feedback)
+
+    assert arm.command_reference == [1, 2, 3, 4, 5, 6]

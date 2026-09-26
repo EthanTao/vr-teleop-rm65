@@ -29,7 +29,7 @@ def test_joint_feedback_near_q3_or_q5_only_warns():
     warnings = RM65_B_SPEC.singularity_warnings(np.zeros(6), warning_rad=np.deg2rad(10.0))
     assert valid
     assert reason == ""
-    assert warnings == ("J3 near 0 deg", "J5 near 0 deg")
+    assert warnings == ("J3 接近 0°", "J5 接近 0°")
 
 
 @pytest.mark.parametrize(

@@ -97,7 +97,7 @@ class RM65ModelSpec:
         violations = np.flatnonzero((feedback < lower) | (feedback > upper))
         if violations.size:
             joint_index = int(violations[0])
-            return False, f"J{joint_index + 1} joint feedback outside RM65-B limits"
+            return False, f"J{joint_index + 1} 关节反馈超出 RM65-B 限位"
         return True, ""
 
     def singularity_warnings(
@@ -110,9 +110,9 @@ class RM65ModelSpec:
             return ()
         warnings = []
         if abs(float(feedback[2])) <= warning:
-            warnings.append("J3 near 0 deg")
+            warnings.append("J3 接近 0°")
         if abs(float(feedback[4])) <= warning:
-            warnings.append("J5 near 0 deg")
+            warnings.append("J5 接近 0°")
         return tuple(warnings)
 
 

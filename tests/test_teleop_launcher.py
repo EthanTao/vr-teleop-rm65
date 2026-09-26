@@ -16,10 +16,9 @@ def no_remote_manifest_writes(monkeypatch):
     monkeypatch.setattr(teleop, "_write_remote_manifest", lambda files: True)
 
 
-def test_noninteractive_sim_requires_home_joint():
+def test_noninteractive_sim_uses_fixed_home_joint():
     with patch.object(teleop.sys.stdin, "isatty", return_value=False):
-        with pytest.raises(ValueError, match="home-joint-deg"):
-            teleop._resolve_sim_home_joint(None)
+        assert teleop._resolve_sim_home_joint(None) == [0, 0, -60, 0, 60, 0]
 
 
 def test_run_in_container_forwards_home_joint_values():
@@ -90,6 +89,23 @@ def test_run_in_container_supports_hardware_dry_run():
     assert "scripts/hardware/teleop_realman_rm65_safe_hardware.py" in command
     assert f"--arm-host {teleop.ARM_HOST}" in command
     assert "--dry-run" in command
+
+
+def test_run_in_container_home_preflight_is_opt_in():
+    """真机入口默认关闭回位路径预检；只有显式要求时才把开关传下去。"""
+    process = MagicMock()
+    process.returncode = 0
+    with (
+        patch.object(teleop.sys.stdin, "isatty", return_value=False),
+        patch.object(teleop.subprocess, "Popen", return_value=process) as popen,
+    ):
+        teleop.run_in_container("hardware")
+        default_command = popen.call_args.args[0][-1]
+        teleop.run_in_container("hardware", enable_home_path_preflight=True)
+        enabled_command = popen.call_args.args[0][-1]
+
+    assert "--enable-home-path-preflight" not in default_command
+    assert "--enable-home-path-preflight" in enabled_command
 
 
 def _fake_remote_manifest(monkeypatch, teleop_module, manifest):
@@ -225,7 +241,9 @@ def test_every_launch_mode_syncs_code(monkeypatch):
     monkeypatch.setattr(
         teleop,
         "run_in_container",
-        lambda mode, home_joint_deg=None, sim_ik_backend="placo": order.append("run") or 0,
+        lambda mode, home_joint_deg=None, sim_ik_backend="placo", enable_home_path_preflight=False: (
+            order.append("run") or 0
+        ),
     )
 
     with pytest.raises(SystemExit):

@@ -53,6 +53,7 @@ class TestJointConstraints:
             dt=0.01,
             enable_velocity_limit=True,
             max_joint_velocity=1.0,  # rad/s
+            max_joint_acceleration=100.0,  # rad/s^2: 一周期即可到满速
         )
         # 第一帧：无历史，透传
         q1 = np.array([0.0, 0.0])
@@ -62,6 +63,40 @@ class TestJointConstraints:
         q_out = c.apply(q2)
         assert q_out[0] == pytest.approx(0.01)  # 限速到 0.01 rad
         assert q_out[1] == pytest.approx(0.0)
+
+    def test_velocity_limit_ramps_up_with_the_acceleration_bound(self):
+        """默认加速度上限：不应一周期从静止跳到满速"""
+        robot = _make_mock_robot(["j1"], np.array([-10.0]), np.array([10.0]))
+        c = JointConstraints(
+            placo_robot=robot,
+            dt=0.01,
+            enable_velocity_limit=True,
+            max_joint_velocity=1.0,
+            max_joint_acceleration=10.0,
+        )
+        c.apply(np.array([0.0]))
+        first = c.apply(np.array([5.0]))
+        assert first[0] == pytest.approx(10.0 * 0.01 * 0.01)  # a*dt*dt
+        # 10 个周期后达到速度上限
+        q = first
+        for _ in range(20):
+            q = c.apply(np.array([5.0]))
+        assert q[0] - first[0] == pytest.approx(1.0 * 0.01 * 20, rel=0.2)
+
+    def test_sync_reanchors_the_velocity_reference(self):
+        """换段（重新握 Grip / 回位结束）后不应相对旧参考被限速"""
+        robot = _make_mock_robot(["j1"], np.array([-10.0]), np.array([10.0]))
+        c = JointConstraints(
+            placo_robot=robot,
+            dt=0.01,
+            enable_velocity_limit=True,
+            max_joint_velocity=1.0,
+        )
+        c.sync(np.array([0.0]))
+        c.apply(np.array([0.0]))
+        c.sync(np.array([2.0]))
+        out = c.apply(np.array([2.0]))
+        assert out[0] == pytest.approx(2.0)
 
     def test_velocity_limit_off_by_default(self):
         """默认不开启速度限制，帧间跳变不被限制"""

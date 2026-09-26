@@ -64,10 +64,10 @@ def test_continuity_limit_rejects_jump_even_when_close_to_feedback():
     assert send(controller, receiver)
     solver.step = np.deg2rad(-0.6)
     assert not send(controller, receiver)
-    assert "command continuity" in arm.fault_reason
+    assert "上一命令连续性" in arm.fault_reason
     assert len(arm.movej_follow_commands) == 1
     assert controller._last_accepted_joint_rad is None
-    assert controller._rearm_button_required
+    assert controller._rearm_required
 
 
 @pytest.mark.parametrize("dry_run", [False, True])
@@ -77,7 +77,7 @@ def test_repeated_feedback_cannot_allow_commands_to_run_away(dry_run):
     for _ in range(3):
         assert send(controller, receiver)
     assert not send(controller, receiver)
-    assert "measured feedback" in arm.fault_reason
+    assert "实测反馈" in arm.fault_reason
     assert len(arm.movej_follow_commands) == (0 if dry_run else 3)
     assert controller._last_accepted_joint_rad is None
 
@@ -99,7 +99,7 @@ def test_failed_submission_never_commits_candidate_and_requires_rearm(monkeypatc
     assert not send(controller, receiver)
     assert arm.fault_latched
     assert controller._last_accepted_joint_rad is None
-    assert controller._rearm_button_required
+    assert controller._rearm_required
     calls = len(solver.calls)
     assert not send(controller, receiver)
     assert len(solver.calls) == calls
@@ -170,9 +170,9 @@ def test_segment_boundary_rebuilds_seed_from_new_measured_state(boundary):
         assert arm.slow_stop_calls == 1
     elif boundary == "fault_rearm":
         controller._latch_safety_fault("injected fault")
-        controller._handle_rearm(0.0, False, 1.0)
+        controller._handle_rearm(1.0, 1.0)
         assert arm.fault_latched
-        controller._handle_rearm(0.0, True, 1.0)
+        controller._handle_rearm(0.0, 1.0)
         assert not arm.fault_latched
     elif boundary == "reset_start":
         controller.home_xyz = receiver.feedback.tcp_xyz_m.copy()
@@ -183,7 +183,8 @@ def test_segment_boundary_rebuilds_seed_from_new_measured_state(boundary):
         arm.latch_fault("external fault")
         controller._run_cycle(1.0)
         assert controller._last_accepted_joint_rad is None
-        controller._handle_rearm(0.0, True, 1.0)
+        controller._handle_rearm(1.0, 1.0)
+        controller._handle_rearm(0.0, 1.0)
         assert not arm.fault_latched
     else:
         controller._reset_anchor(receiver.feedback)
@@ -200,7 +201,7 @@ def test_stale_feedback_clears_reference_before_next_solve():
     controller.grip_active = True
     controller.xr.grip = 1.0
     controller._run_cycle(1.21)
-    assert "feedback stale" in arm.fault_reason
+    assert "反馈已过期" in arm.fault_reason
     assert len(solver.calls) == 1
     assert controller._last_accepted_joint_rad is None
 
@@ -221,7 +222,7 @@ def test_reset_send_failure_cannot_be_reported_as_success(monkeypatch):
     controller._tick_reset(1.0, receiver.feedback)
     assert arm.fault_latched
     assert not controller._resetting
-    assert controller._rearm_button_required
+    assert controller._rearm_required
     assert controller._last_accepted_joint_rad is None
 
 
@@ -268,7 +269,7 @@ def test_command_reference_sync_failure_clears_joint_reference(monkeypatch):
     assert not send(controller, receiver)
     assert controller._last_accepted_joint_rad is None
     assert arm.fault_latched
-    assert controller._rearm_button_required
+    assert controller._rearm_required
 
 
 def test_continuous_replay_tracks_with_small_measured_lag():

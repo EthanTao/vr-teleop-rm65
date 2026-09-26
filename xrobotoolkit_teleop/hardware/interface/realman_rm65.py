@@ -322,9 +322,9 @@ class RealmanRM65Interface:
     def _pose_is_within_bounds(self, xyz: np.ndarray) -> tuple[bool, str]:
         xyz = np.asarray(xyz, dtype=float)
         if xyz.shape != (3,) or not np.all(np.isfinite(xyz)):
-            return False, "target TCP position is non-finite"
+            return False, "目标 TCP 位置不是有限数值"
         if np.any(xyz < self.workspace_min_xyz_m) or np.any(xyz > self.workspace_max_xyz_m):
-            return False, f"target TCP xyz {np.round(xyz, 3).tolist()} outside configured bounds"
+            return False, f"目标 TCP xyz {np.round(xyz, 3).tolist()} 超出配置的边界"
         return True, ""
 
     @staticmethod
@@ -368,7 +368,7 @@ class RealmanRM65Interface:
         try:
             self.stop()
         except Exception as exc:
-            print(f"[WARN] failed to send safety stop: {exc}")
+            print(f"[WARN] 安全停止指令发送失败：{exc}")
 
     def clear_fault(self) -> None:
         self.fault_latched = False
@@ -414,7 +414,7 @@ class RealmanRM65Interface:
         else:
             self._unacknowledged_movel_count += 1
             if self._unacknowledged_movel_count == 1:
-                print("[INFO] movel uses asynchronous confirmation; relying on RM65 feedback watchdog")
+                print("[INFO] movel 为异步确认；改由 RM65 反馈看门狗兜底")
         self._last_commanded_pose6 = pose6
         return True
 
@@ -448,7 +448,7 @@ class RealmanRM65Interface:
         try:
             self.send_only(payload)
         except (OSError, ConnectionError, RuntimeError) as exc:
-            self._trip_fault(f"RM65 movep_follow transport failed: {exc}")
+            self._trip_fault(f"RM65 movep_follow 通信失败：{exc}")
             return False
         self._last_commanded_pose6 = self.xyz_quat_to_pose6(xyz, quat)
         return True
@@ -460,10 +460,10 @@ class RealmanRM65Interface:
         try:
             joint_rad = np.asarray(joint_rad, dtype=float)
         except (TypeError, ValueError) as exc:
-            self._trip_fault(f"movej_follow target is not numeric: {exc}")
+            self._trip_fault(f"movej_follow 目标不是数值：{exc}")
             return False
         if joint_rad.shape != (6,) or not np.all(np.isfinite(joint_rad)):
-            self._trip_fault("movej_follow target must be a finite six-joint array")
+            self._trip_fault("movej_follow 目标必须是 6 个有限关节值")
             return False
         payload = {
             "command": "movej_follow",
@@ -476,7 +476,7 @@ class RealmanRM65Interface:
         try:
             self.send_only(payload)
         except (OSError, ConnectionError, RuntimeError) as exc:
-            self._trip_fault(f"RM65 movej_follow transport failed: {exc}")
+            self._trip_fault(f"RM65 movej_follow 通信失败：{exc}")
             return False
         return True
 
@@ -484,10 +484,10 @@ class RealmanRM65Interface:
         response = self.send_json({"command": "set_arm_stop"}, wait_s=max(0.02, self.command_wait_s))
         error = self._response_error(response)
         if error is not None:
-            raise RuntimeError(f"controller rejected set_arm_stop: {error}")
+            raise RuntimeError(f"控制器拒绝 set_arm_stop：{error}")
         acknowledged = self._command_acknowledged(response, "set_arm_stop")
         if not acknowledged:
-            print("[WARN] set_arm_stop was sent but the controller did not confirm it")
+            print("[WARN] set_arm_stop 已发送，但控制器未确认")
         return acknowledged
 
     def slow_stop(self) -> bool:
@@ -497,8 +497,8 @@ class RealmanRM65Interface:
         )
         error = self._response_error(response)
         if error is not None:
-            raise RuntimeError(f"controller rejected set_arm_slow_stop: {error}")
+            raise RuntimeError(f"控制器拒绝 set_arm_slow_stop：{error}")
         acknowledged = self._command_acknowledged(response, "set_arm_slow_stop")
         if not acknowledged:
-            print("[WARN] set_arm_slow_stop was sent but the controller did not confirm it")
+            print("[WARN] set_arm_slow_stop 已发送，但控制器未确认")
         return acknowledged

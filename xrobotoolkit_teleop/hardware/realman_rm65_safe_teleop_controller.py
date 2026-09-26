@@ -37,8 +37,11 @@ from xrobotoolkit_teleop.utils.geometry import (
 )
 
 
-class RealmanRM65SafeTeleopController:
-    """RM65 teleoperation with one TCP writer and independent UDP safety feedback."""
+class RM65ControlCore:
+    """Shared RM65 control state machine using injected arm, XR and feedback ports.
+
+    Hardware and simulation run the same mapping, limiter, DLS and admission path.
+    """
 
     def __init__(
         self,
@@ -46,14 +49,14 @@ class RealmanRM65SafeTeleopController:
         arm_port: int = 8080,
         pose_source: str = "right_controller",
         control_trigger: str = "right_grip",
-        scale_factor: float = 0.25,
+        scale_factor: float = 1.0,
         rotation_scale_factor: float = 0.25,
         control_rate_hz: float = 50.0,
         move_v: int = 5,
         move_r: int = 80,
-        max_offset_m: float = 0.03,
+        max_offset_m: float | None = 0.15,
         max_rot_offset_rad: float = 0.20,
-        motion_deadband_m: float = 0.003,
+        motion_deadband_m: float = 0.0,
         rot_deadband_rad: float = 0.04,
         grip_on_threshold: float = 0.2,
         grip_off_threshold: float = 0.15,
@@ -65,6 +68,10 @@ class RealmanRM65SafeTeleopController:
         log_motion_debug: bool = False,
         reset_button: str = "B",
         reset_duration_s: float = 3.0,
+        home_joint_deg: tuple[float, float, float, float, float, float] | None = None,
+        auto_home_on_start: bool = False,
+        home_joint_tolerance_deg: float = 1.0,
+        enable_home_path_preflight: bool = True,
         xr_watchdog_timeout_s: float = 0.20,
         max_tracking_error_m: float = 0.12,
         max_tracking_error_rad: float = 0.80,
@@ -90,6 +97,9 @@ class RealmanRM65SafeTeleopController:
         rotation_full_gain_linear_speed_m_s: float = 0.05,
         rotation_zero_gain_linear_speed_m_s: float = 0.25,
         max_joint_speed_ratio: float = 0.10,
+        max_tracking_lag_cycles: float = 3.0,
+        tracking_lag_hold_dwell_s: float = 0.3,
+        max_command_stall_cycles: int = 6,
         rearm_stationary_speed_rad_s: float = math.radians(1.0),
         enable_singularity_avoidance: bool = True,
         singularity_slowdown_ratio: float = 0.04,
@@ -127,7 +137,10 @@ class RealmanRM65SafeTeleopController:
         self.control_rate_hz = self._positive(control_rate_hz, "control_rate_hz")
         self.dt = 1.0 / self.control_rate_hz
         self._monotonic = monotonic_fn
-        self.max_offset_m = self._positive(max_offset_m, "max_offset_m")
+        # None disables the per-Grip translation envelope: the hand offset is then bounded only
+        # by the TCP workspace box, the XR single-frame jump check and the joint admission gates.
+        # Every explicit value keeps the original positive-number semantics.
+        self.max_offset_m = None if max_offset_m is None else self._positive(max_offset_m, "max_offset_m")
         self.max_rot_offset_rad = self._positive(max_rot_offset_rad, "max_rot_offset_rad")
         self.motion_deadband_m = self._non_negative(motion_deadband_m, "motion_deadband_m")
         self.rot_deadband_rad = self._non_negative(rot_deadband_rad, "rot_deadband_rad")
@@ -244,6 +257,24 @@ class RealmanRM65SafeTeleopController:
             port=udp_port,
         )
         self.model_spec = RM65_B_SPEC
+        self.home_joint_rad = None
+        self.home_joint_tolerance_rad = math.radians(
+            self._positive(home_joint_tolerance_deg, "home_joint_tolerance_deg")
+        )
+        self.auto_home_on_start = bool(auto_home_on_start)
+        self.enable_home_path_preflight = bool(enable_home_path_preflight)
+        if home_joint_deg is not None:
+            values = np.asarray(home_joint_deg, dtype=float)
+            if values.shape != (6,) or not np.all(np.isfinite(values)):
+                raise ValueError("home_joint_deg must contain six finite joint angles")
+            self.home_joint_rad = np.deg2rad(values)
+            valid, reason = self.model_spec.validate_joint_feedback(self.home_joint_rad, 0.0)
+            if not valid:
+                raise ValueError(reason)
+            if self.dls is None:
+                raise ValueError("fixed joint home requires damped_ik_movej_follow")
+        if self.auto_home_on_start and self.home_joint_rad is None:
+            raise ValueError("auto_home_on_start requires home_joint_deg")
         self.ik_solver = ik_solver
         if self.motion_command == "official_ik_movej_follow" and self.ik_solver is None:
             self.ik_solver = RealmanOfficialRemoteIK(
@@ -256,8 +287,37 @@ class RealmanRM65SafeTeleopController:
             max_angular_velocity_rad_s=max_angular_velocity_rad_s,
             max_angular_acceleration_rad_s2=max_angular_acceleration_rad_s2,
         )
-        # Same per-joint per-cycle budget the official IK path already enforces.
+        # Two separate budgets, deliberately not the same number:
+        #   * command continuity  - how far one sent command may differ from the previous one;
+        #   * tracking allowance  - how far the command may lead the *measured* joints.
+        # The second one has to absorb the servo/transport lag (measured up to 48 ms on site),
+        # so an allowance of one control period only ever measured "the arm has not caught up
+        # yet", not joint speed. It is a lag budget, and it is what the lag governor below uses.
         self._joint_step_budget_rad = self.model_spec.max_joint_velocity_rad_s * self.max_joint_speed_ratio * self.dt
+        self.max_tracking_lag_cycles = self._positive(max_tracking_lag_cycles, "max_tracking_lag_cycles")
+        if self.max_tracking_lag_cycles <= 1.0:
+            raise ValueError("max_tracking_lag_cycles must exceed one control period of command lead")
+        self.tracking_lag_hold_dwell_s = self._positive(tracking_lag_hold_dwell_s, "tracking_lag_hold_dwell_s")
+        self.max_command_stall_cycles = self._positive_int(
+            max_command_stall_cycles, "max_command_stall_cycles", minimum=2
+        )
+        self._joint_lag_limit_rad = self._joint_step_budget_rad * self.max_tracking_lag_cycles
+        # A proportional deceleration can only approach the allowance asymptotically, so the
+        # hold must trigger below it or persistent degradation could never be reached. With the
+        # gain below, the trigger sits exactly at the equilibrium lead of an arm that never
+        # moves, which is the smallest value that still lets a dead servo be detected.
+        self._joint_lag_hold_trigger_rad = self._joint_lag_limit_rad * (
+            (self.max_tracking_lag_cycles - 1.0) / self.max_tracking_lag_cycles
+        )
+        # Release once the arm has recovered half of the soft zone above the per-period budget.
+        self._joint_lag_release_rad = 0.5 * (self._joint_lag_limit_rad + self._joint_step_budget_rad)
+        # Per-joint velocity budget handed to the DLS solver: the model limit scaled by
+        # --max-joint-speed-ratio, with no extra shrink (speed scale 1). How far the command may
+        # lead the *measured* joints is a separate budget owned by the lag governor above, so it
+        # must not be folded into this speed limit. The earlier version of this line additionally
+        # clamped it to ``_joint_step_budget_rad / tracking_lag_hold_dwell_s``, i.e. a constant
+        # dt/dwell = 1/15 haircut, which made J1/J2 crawl at 1.2 deg/s instead of 18 deg/s.
+        self._dls_joint_velocity_limit_rad_s = self.model_spec.max_joint_velocity_rad_s * self.max_joint_speed_ratio
         self.max_linear_velocity_m_s = self._positive(max_linear_velocity_m_s, "max_linear_velocity_m_s")
         self.max_angular_velocity_rad_s = self._positive(max_angular_velocity_rad_s, "max_angular_velocity_rad_s")
         self._initialize_runtime_state(
@@ -332,7 +392,7 @@ class RealmanRM65SafeTeleopController:
             raise ValueError("self_test_axis must be +x, -x, +y, -y, +z or -z (controller TCP frame)")
         if not 0.02 <= self.self_test_distance_m <= 0.03:
             raise ValueError("self_test_distance_m must be between 0.02 and 0.03")
-        if self.self_test_distance_m > self.max_offset_m:
+        if self.max_offset_m is not None and self.self_test_distance_m > self.max_offset_m:
             raise ValueError("self-test distance exceeds max_offset_m")
         if self.motion_command not in {"movep_follow", "damped_ik_movej_follow"}:
             raise ValueError("self-test requires movep_follow or damped_ik_movej_follow")
@@ -358,9 +418,17 @@ class RealmanRM65SafeTeleopController:
 
         # Last locally accepted joint command, never a replacement for UDP feedback.
         self._last_accepted_joint_rad: np.ndarray | None = None
+        # Continuous seed for velocity/acceleration shaping. Kept even across a lag hold,
+        # so the next accepted step is one small step from where the command stream already is.
+        self._dls_seed_joint_rad: np.ndarray | None = None
         self._dls_velocity = np.zeros(6)
         self._dls_stopping = False
         self._dls_consecutive_failures = 0
+        # Tracking-lag governor state: when the command first exceeded its allowance.
+        self._lag_exceeded_since_t: float | None = None
+        self._lag_holding = False
+        self._lag_hold_reason: str | None = None
+        self._command_stalled_cycles = 0
         self.grip_active = False
         self.ref_arm_xyz: np.ndarray | None = None
         self.ref_arm_quat: np.ndarray | None = None
@@ -369,8 +437,12 @@ class RealmanRM65SafeTeleopController:
         self.home_xyz: np.ndarray | None = None
         self.home_quat: np.ndarray | None = None
         self._resetting = False
+        self._startup_homing = False
         self._reset_start_xyz: np.ndarray | None = None
         self._reset_start_quat: np.ndarray | None = None
+        self._reset_start_joint_rad: np.ndarray | None = None
+        self._reset_waiting_for_stop = False
+        self._reset_duration_actual_s = self.reset_duration_s
         self._reset_step = 0
         self._reset_started_t: float | None = None
         self._reset_steps_total = max(1, int(round(self.reset_duration_s / self.dt)))
@@ -381,11 +453,15 @@ class RealmanRM65SafeTeleopController:
         self._last_valid_xr_t: float | None = None
         self._current_rotation_gain = 1.0
         self._rearm_required = False
-        self._rearm_release_seen = False
-        self._rearm_button_required = False
+        self._rearm_seen_pressed = False
         self._last_singularity_warning_t = -math.inf
         self._last_debug_summary_t = 0.0
         self._last_motion_preview_t = -math.inf
+        # Preview-only snapshots for --log-motion-debug. Nothing in the control path reads them.
+        self._debug_xr_delta_m: np.ndarray | None = None
+        self._debug_xr_delta_rot_rad: np.ndarray | None = None
+        self._dls_debug: dict | None = None
+        self._last_preview_text: str | None = None
         self._last_cycle_start_t: float | None = None
         self._last_send_duration_s = 0.0
         self._started = False
@@ -462,15 +538,23 @@ class RealmanRM65SafeTeleopController:
             self.ref_ctrl_quat = controller_quat.copy()
             if self._diagnostic_row is not None:
                 self._diagnostic_row.update(delta_pos_norm=0.0, delta_rot_norm=0.0)
+            if self.log_motion_debug:
+                self._debug_xr_delta_m = np.zeros(3)
+                self._debug_xr_delta_rot_rad = np.zeros(3)
             return np.zeros(3, dtype=float), np.zeros(3, dtype=float)
 
-        delta_xyz = (controller_xyz - self.ref_ctrl_xyz) * self.scale_factor
-        delta_rot = quat_diff_as_angle_axis(self.ref_ctrl_quat, controller_quat) * self.rotation_scale_factor
+        raw_xyz = controller_xyz - self.ref_ctrl_xyz
+        raw_rot = quat_diff_as_angle_axis(self.ref_ctrl_quat, controller_quat)
+        if self.log_motion_debug:
+            self._debug_xr_delta_m = raw_xyz.copy()
+            self._debug_xr_delta_rot_rad = raw_rot.copy()
+        delta_xyz = raw_xyz * self.scale_factor
+        delta_rot = raw_rot * self.rotation_scale_factor
         translation_norm = float(np.linalg.norm(delta_xyz))
         if self._diagnostic_row is not None:
             self._diagnostic_row["delta_pos_norm"] = translation_norm
             self._diagnostic_row["delta_rot_norm"] = float(np.linalg.norm(delta_rot))
-        if translation_norm > self.max_offset_m:
+        if self.max_offset_m is not None and translation_norm > self.max_offset_m:
             delta_xyz *= self.max_offset_m / translation_norm
         rotation_norm = float(np.linalg.norm(delta_rot))
         if rotation_norm > self.max_rot_offset_rad:
@@ -496,17 +580,21 @@ class RealmanRM65SafeTeleopController:
             self._last_xr_update_t = now
         return self._last_xr_update_t is not None and now - self._last_xr_update_t <= self.xr_watchdog_timeout_s
 
-    def _enter_rearm(self, require_button: bool) -> None:
+    def _enter_rearm(self, *, require_fresh_release: bool = True) -> None:
         self._last_accepted_joint_rad = None
+        seen_pressed = self.grip_active or not require_fresh_release
+        if self._rearm_required:
+            seen_pressed = self._rearm_seen_pressed or seen_pressed
         self._rearm_required = True
-        self._rearm_release_seen = False
-        self._rearm_button_required = require_button
+        self._rearm_seen_pressed = seen_pressed
 
     def _latch_safety_fault(self, reason: str) -> None:
+        self._enter_rearm()
         self.grip_active = False
         self._resetting = False
+        self._startup_homing = False
+        self._reset_waiting_for_stop = False
         self._clear_anchor()
-        self._enter_rearm(require_button=True)
         self.arm.latch_fault(reason)
 
     def _feedback_age(self, now: float) -> float:
@@ -524,12 +612,12 @@ class RealmanRM65SafeTeleopController:
         now: float,
     ) -> str | None:
         if feedback.arm_error_codes:
-            return f"RM65 reported error codes: {feedback.arm_error_codes}"
+            return f"RM65 上报错误码：{feedback.arm_error_codes}"
         valid, reason = self.model_spec.validate_joint_feedback(feedback.joint_rad, np.deg2rad(2.0))
         if not valid:
             return reason
         if feedback.joint_speed_rad_s is None:
-            return "RM65 UDP feedback does not contain joint_speed"
+            return "RM65 UDP 反馈缺少 joint_speed 字段"
         if check_overspeed:
             limits = self.model_spec.max_joint_velocity_rad_s * self.max_joint_speed_ratio
             violations = np.flatnonzero(np.abs(feedback.joint_speed_rad_s) > limits)
@@ -537,7 +625,7 @@ class RealmanRM65SafeTeleopController:
                 index = int(violations[0])
                 actual = math.degrees(float(abs(feedback.joint_speed_rad_s[index])))
                 limit = math.degrees(float(limits[index]))
-                return f"J{index + 1} overspeed: {actual:.2f}deg/s > {limit:.2f}deg/s"
+                return f"J{index + 1} 关节超速：{actual:.2f}°/s > {limit:.2f}°/s"
         if check_tracking:
             commanded_pose6 = self.arm.get_last_commanded_pose6()
             if commanded_pose6 is not None:
@@ -545,14 +633,11 @@ class RealmanRM65SafeTeleopController:
                 position_error = float(np.linalg.norm(commanded_xyz - feedback.tcp_xyz_m))
                 rotation_error = float(np.linalg.norm(quat_diff_as_angle_axis(feedback.tcp_quat_wxyz, commanded_quat)))
                 if position_error > self.max_tracking_error_m or rotation_error > self.max_tracking_error_rad:
-                    return (
-                        "RM65 tracking error exceeded limit: "
-                        f"position={position_error:.3f}m, rotation={rotation_error:.3f}rad"
-                    )
+                    return "RM65 跟踪误差超限：" f"位置={position_error:.3f}m，姿态={rotation_error:.3f}rad"
         warnings = self.model_spec.singularity_warnings(feedback.joint_rad, np.deg2rad(10.0))
         if warnings and now - self._last_singularity_warning_t >= 5.0:
             self._last_singularity_warning_t = now
-            print(f"[SAFETY WARN] near singularity: {', '.join(warnings)}")
+            print(f"[SAFETY WARN] 逼近奇异：{', '.join(warnings)}")
         return None
 
     def _checked_feedback(
@@ -570,14 +655,14 @@ class RealmanRM65SafeTeleopController:
         feedback = self.feedback_receiver.latest()
         if feedback is None:
             if require_fresh:
-                self._latch_safety_fault("RM65 UDP feedback unavailable")
+                self._latch_safety_fault("读不到 RM65 UDP 反馈")
             return None
         age = now - feedback.received_monotonic_s
         if age < -0.01:
-            self._latch_safety_fault("RM65 UDP feedback timestamp is in the future")
+            self._latch_safety_fault("RM65 UDP 反馈时间戳来自未来")
             return None
         if require_fresh and age > self.udp_feedback_timeout_s:
-            self._latch_safety_fault(f"RM65 UDP feedback stale: age={age:.3f}s")
+            self._latch_safety_fault(f"RM65 UDP 反馈已过期：{age:.3f}s")
             return None
         reason = self._validate_feedback(
             feedback,
@@ -600,7 +685,7 @@ class RealmanRM65SafeTeleopController:
             for message in reversed(messages):
                 if message.get(field) == value:
                     return message
-            raise RuntimeError(f"failed to read {command}; refusing default FK parameters")
+            raise RuntimeError(f"读取 {command} 失败；拒绝使用默认 FK 参数")
 
         dh = query("get_DH_data", "command", "get_DH_data")
         frames = self.dls.kinematics
@@ -614,10 +699,10 @@ class RealmanRM65SafeTeleopController:
             frames._tool_identity = False
         self.dls.begin_cycle()
         print(
-            "[INFO] DLS loaded controller DH; "
-            f"d6={dh['joint_6'][2] / 1e6:.6f}m; "
-            f"tool={tool.get('tool_name') if tool is not None else 'explicit transform'}; "
-            "work/base transform unchanged; FK/UDP gate remains enabled"
+            "[INFO] DLS 已载入控制器 DH；"
+            f"d6={dh['joint_6'][2] / 1e6:.6f}m；"
+            f"工具帧={tool.get('tool_name') if tool is not None else '显式变换'}；"
+            "work/base 变换保持原样；FK/UDP 一致性校验收仍然开启"
         )
 
     def _startup(self) -> None:
@@ -625,15 +710,15 @@ class RealmanRM65SafeTeleopController:
         self.arm.connect()
         info = self.arm.get_arm_software_info()
         if info is None:
-            raise RuntimeError("failed to read RM65 software information")
+            raise RuntimeError("读取 RM65 软件版本信息失败")
         product = info.get("Product_version", info.get("product_version"))
         if not isinstance(product, str) or not product.casefold().startswith(self.expected_product_prefix.casefold()):
-            raise RuntimeError(f"expected {self.expected_product_prefix}, got {product!r}")
+            raise RuntimeError(f"机型应为 {self.expected_product_prefix}，实际为 {product!r}")
         controller_generation = str(info.get("robot_controller_version", "")).strip()
         if controller_generation.startswith("4"):
-            raise RuntimeError("this controller expects third-generation joint_speed units, got generation 4")
-        print(f"[INFO] motion_command={self.motion_command} dry_run={self.dry_run}")
-        print("[INFO] RM65 preflight " f"product={product}, ctrl={info.get('ctrl_info')}, plan={info.get('plan_info')}")
+            raise RuntimeError("本控制器按第三代 joint_speed 单位解析，但检测到第四代控制器")
+        print(f"[INFO] 运动指令={self.motion_command} dry_run={self.dry_run}")
+        print("[INFO] RM65 预检 " f"product={product}, ctrl={info.get('ctrl_info')}, plan={info.get('plan_info')}")
         self._configure_dls_from_controller()
         deadline = self._monotonic() + max(1.0, 5.0 * self.udp_feedback_timeout_s)
         feedback = self.feedback_receiver.latest()
@@ -641,10 +726,10 @@ class RealmanRM65SafeTeleopController:
             self._sleep(0.01)
             feedback = self.feedback_receiver.latest()
         if feedback is None:
-            raise RuntimeError("no valid RM65 UDP feedback received during startup")
+            raise RuntimeError("启动期间没有收到有效的 RM65 UDP 反馈")
         now = self._monotonic()
         if now - feedback.received_monotonic_s > self.udp_feedback_timeout_s:
-            raise RuntimeError("initial RM65 UDP feedback is stale")
+            raise RuntimeError("启动时的 RM65 UDP 反馈已过期")
         reason = self._validate_feedback(
             feedback,
             check_overspeed=True,
@@ -656,18 +741,53 @@ class RealmanRM65SafeTeleopController:
         if self.dls is not None:
             self.dls.begin_cycle()
             self._dls_frame_matches(feedback)
-        self.home_xyz = feedback.tcp_xyz_m.copy()
-        self.home_quat = feedback.tcp_quat_wxyz.copy()
+            # Report the pose the arm is actually parked in: the fixed joint home above is only
+            # a target, and a singular measured pose holds every teleop cycle with no other clue.
+            ratio, angles = self.dls.metrics(feedback.joint_rad)
+            severity = self.dls.severity(ratio, angles)
+            zone = "硬停区" if severity >= 1 else ("减速区" if severity > 0 else "正常")
+            print(
+                f"[INFO] 实测 UDP 位形奇异比={ratio:.5f} 严重度={severity:.2f} 区域={zone} "
+                f"|J3|={math.degrees(float(angles[0])):.2f}° |J5|={math.degrees(float(angles[1])):.2f}°"
+            )
+            if severity >= 1:
+                print(
+                    "[WARN] 实测位形处于 DLS 硬停区：每个遥操作周期都会保持不动。"
+                    "请先用示教器或拖动把机械臂挪出该位形，再重新握 Grip。"
+                )
+            elif severity > 0:
+                print("[WARN] 实测位形处于 DLS 减速区：运动速度会被按比例降低。")
+        if self.home_joint_rad is None:
+            self.home_xyz = feedback.tcp_xyz_m.copy()
+            self.home_quat = feedback.tcp_quat_wxyz.copy()
+            print(f"[INFO] 已从 UDP 记录启动 TCP 位姿 xyz_m={np.round(self.home_xyz, 4).tolist()}")
+        else:
+            self.home_xyz, self.home_quat = self.dls.kinematics.forward(self.home_joint_rad)
+            valid, reason = self.arm._pose_is_within_bounds(self.home_xyz)
+            if not valid:
+                raise RuntimeError(f"固定六轴 Home 的 TCP 超出工作空间：{reason}")
+            self.dls.begin_cycle()
+            ratio, angles = self.dls.metrics(self.home_joint_rad)
+            if self.dls.severity(ratio, angles) > 0.0:
+                raise RuntimeError(f"固定六轴 Home 落在奇异减速区：奇异比={ratio:.5f}")
+            print(
+                f"[INFO] 固定六轴 Home deg={np.round(np.rad2deg(self.home_joint_rad), 3).tolist()} "
+                f"奇异比={ratio:.5f} TCP_xyz_m={np.round(self.home_xyz, 4).tolist()}"
+            )
         self.arm.sync_command_reference(self.arm.xyz_quat_to_pose6(feedback.tcp_xyz_m, feedback.tcp_quat_wxyz))
         self.scheduler = FixedRateScheduler(self.control_rate_hz, now)
         self._started = True
-        print(f"[INFO] home pose captured from UDP xyz_m={np.round(self.home_xyz, 4).tolist()}")
 
     def _clear_anchor(self) -> None:
         self._dls_velocity = np.zeros(6)
         self._dls_stopping = False
         self._dls_consecutive_failures = 0
         self._last_accepted_joint_rad = None
+        self._dls_seed_joint_rad = None
+        self._lag_exceeded_since_t = None
+        self._lag_holding = False
+        self._lag_hold_reason = None
+        self._command_stalled_cycles = 0
         self.ref_arm_xyz = None
         self.ref_arm_quat = None
         self.ref_ctrl_xyz = None
@@ -680,12 +800,18 @@ class RealmanRM65SafeTeleopController:
         self._singularity_zone = "clear"
         self._singularity_hold = False
         self._singularity_hold_reported = False
+        # A new segment must show its first preview even if the text matches the old segment.
+        self._last_preview_text = None
 
     def _reset_anchor(self, feedback: ArmFeedback) -> None:
         self._dls_velocity = np.zeros(6)
         self._dls_consecutive_failures = 0
         # The next accepted command starts a new segment from fresh measured joints.
         self._last_accepted_joint_rad = None
+        self._dls_seed_joint_rad = None
+        self._lag_exceeded_since_t = None
+        self._lag_holding = False
+        self._command_stalled_cycles = 0
         self.ref_arm_xyz = feedback.tcp_xyz_m.copy()
         self.ref_arm_quat = feedback.tcp_quat_wxyz.copy()
         self.ref_ctrl_xyz = None
@@ -695,7 +821,7 @@ class RealmanRM65SafeTeleopController:
         self.limiter.reset(feedback.tcp_xyz_m, feedback.tcp_quat_wxyz)
         self.limiter.set_speed_scale(1.0)
         self.arm.sync_command_reference(self.arm.xyz_quat_to_pose6(feedback.tcp_xyz_m, feedback.tcp_quat_wxyz))
-        print(f"[INFO] anchor reset from UDP xyz_m={np.round(self.ref_arm_xyz, 4).tolist()}")
+        print(f"[INFO] 已按 UDP 实测重建锚点 xyz_m={np.round(self.ref_arm_xyz, 4).tolist()}")
 
     def _accept_xr_sample(self, xr_pose: np.ndarray, now: float) -> bool:
         xr_pose = np.asarray(xr_pose, dtype=float)
@@ -707,11 +833,11 @@ class RealmanRM65SafeTeleopController:
         try:
             translation_step, rotation_step = xr_pose_step(self._last_valid_xr_pose, xr_pose)
         except ValueError as exc:
-            self._latch_safety_fault(f"invalid XR pose: {exc}")
+            self._latch_safety_fault(f"XR 位姿非法：{exc}")
             return False
         if translation_step > self.max_xr_step_m or rotation_step > self.max_xr_rot_step_rad:
             self._latch_safety_fault(
-                "XR pose jump exceeded limit: " f"translation={translation_step:.3f}m, rotation={rotation_step:.3f}rad"
+                "XR 位姿单帧跳变超限：" f"平移={translation_step:.3f}m，旋转={rotation_step:.3f}rad"
             )
             return False
         previous_time = self._last_valid_xr_t if self._last_valid_xr_t is not None else now
@@ -734,12 +860,12 @@ class RealmanRM65SafeTeleopController:
     ) -> np.ndarray | None:
         """Continue from the accepted command while independently bounding feedback error."""
         if self.ik_solver is None:
-            self._latch_safety_fault("official RealMan IK solver is not initialized")
+            self._latch_safety_fault("睿尔曼官方 IK 求解器未初始化")
             return None
         try:
             measured = np.array(measured_joint_rad, dtype=float, copy=True)
             if measured.shape != (6,) or not np.all(np.isfinite(measured)):
-                raise ValueError("measured joints must be a finite six-joint array")
+                raise ValueError("实测关节必须是 6 个有限值")
             previous = self._last_accepted_joint_rad
             seed = measured.copy() if previous is None else previous.copy()
             if self._diagnostic_row is not None:
@@ -755,31 +881,31 @@ class RealmanRM65SafeTeleopController:
                 copy=True,
             )
         except Exception as exc:
-            self._latch_safety_fault(f"official RM65 IK failed: {exc}")
+            self._latch_safety_fault(f"官方 RM65 IK 求解失败：{exc}")
             return None
         if self._diagnostic_row is not None:
             self._diagnostic_row["joint_candidate_rad"] = target_joint_rad.tolist()
         if target_joint_rad.shape != (6,) or not np.all(np.isfinite(target_joint_rad)):
-            self._latch_safety_fault("official RM65 IK returned an invalid joint target")
+            self._latch_safety_fault("官方 RM65 IK 返回了非法的关节目标")
             return None
         valid, reason = self.model_spec.validate_joint_feedback(target_joint_rad, 0.0)
         if not valid:
-            self._latch_safety_fault(f"official RM65 IK target rejected: {reason}")
+            self._latch_safety_fault(f"官方 RM65 IK 目标被拒：{reason}")
             return None
         max_step_rad = self.model_spec.max_joint_velocity_rad_s * self.max_joint_speed_ratio * self.dt
         # Keep the original conservative measured-state budget. This is a position
         # discrepancy bound, not a measured velocity or a model of feedback latency.
         # Also bound adjacent commands: two safe targets around a noisy measurement
         # can otherwise be too far apart. Never wrap angles across mechanical limits.
-        for reference, label in ((seed, "command continuity"), (measured, "measured feedback")):
+        for reference, label in ((seed, "上一命令连续性"), (measured, "实测反馈")):
             step_rad = np.abs(target_joint_rad - reference)
             violations = np.flatnonzero(step_rad > max_step_rad + 1e-9)
             if violations.size:
                 index = int(violations[0])
                 self._latch_safety_fault(
-                    f"official RM65 IK J{index + 1} step exceeded limit ({label}): "
-                    f"{math.degrees(float(step_rad[index])):.3f}deg > "
-                    f"{math.degrees(float(max_step_rad[index])):.3f}deg"
+                    f"官方 RM65 IK J{index + 1} 单步超限（对比{label}）："
+                    f"{math.degrees(float(step_rad[index])):.3f}° > "
+                    f"{math.degrees(float(max_step_rad[index])):.3f}°"
                 )
                 return None
         return target_joint_rad
@@ -790,19 +916,83 @@ class RealmanRM65SafeTeleopController:
         error_rad = float(np.linalg.norm(shortest_world_rotation_vector(quat, feedback.tcp_quat_wxyz)))
         if error_m > 0.005 or error_rad > math.radians(2.0):
             raise ValueError(
-                f"official FK / UDP frame mismatch: {error_m:.4f}m, "
-                f"{math.degrees(error_rad):.2f}deg; verify work/base and flange/TCP transforms"
+                f"官方 FK 与 UDP 反馈的坐标系不一致：位置差 {error_m:.4f}m，"
+                f"姿态差 {math.degrees(error_rad):.2f}°；请核对 work/base 与法兰/TCP 变换"
             )
 
-    def _hold_damped_motion(self, feedback):
+    def _govern_tracking_lag(self, measured_joint_rad, now: float):
+        """Bound how far the command may lead the measured joints; decelerate, then hold.
+
+        Returns ``(speed_scale, reason, holding)``. ``speed_scale`` in ``[0, 1]`` is handed to
+        the DLS step so the remaining velocity budget shrinks as the lead approaches its
+        allowance; ``reason`` names the axis and both numbers while the allowance is spent.
+        One reference is used by the governor, the bound handed to the solver and the
+        bounded-path guard, so an accepted target can never exceed the allowance.
+
+        The gate has hysteresis: the hold engages at the full allowance and releases only
+        after the arm has recovered half of the soft zone, so a command sitting exactly on
+        the boundary cannot chatter between "hold" and "tiny step".
+
+        The hand-off is the *command stream* (``_dls_seed_joint_rad``), not the last accepted
+        target: a lag hold deliberately keeps the command stream alive, so the lead has to be
+        measured from it for the gap to shrink while the arm catches up. Both are the same
+        value whenever the controller is not holding.
+        """
+        reference = self._dls_seed_joint_rad
+        if reference is None:
+            reference = np.asarray(measured_joint_rad, dtype=float)
+        gap = np.abs(np.asarray(reference, dtype=float) - np.asarray(measured_joint_rad, dtype=float))
+        index = int(np.argmax(gap))
+        allowed = float(self._joint_lag_limit_rad[index])
+        trigger = float(self._joint_lag_hold_trigger_rad[index])
+        release = float(self._joint_lag_release_rad[index])
+        actual = float(gap[index])
+        if self._lag_holding:
+            self._lag_holding = actual > release
+        else:
+            self._lag_holding = actual >= trigger
+        if self._lag_holding:
+            if self._lag_exceeded_since_t is None:
+                self._lag_exceeded_since_t = now
+        else:
+            self._lag_exceeded_since_t = None
+        if self._lag_holding:
+            reason = (
+                f"J{index + 1} 命令超前实测 {math.degrees(actual):.3f}° ≥ 跟随保持线 "
+                f"{math.degrees(trigger):.3f}°（跟随余量 {math.degrees(allowed):.3f}°，"
+                f"即 {self.max_tracking_lag_cycles:g} 个周期额度）"
+            )
+            return 0.0, reason, True
+        # The command stream is free to advance again: forget the previous hold.
+        self._lag_hold_reason = None
+        if actual <= self._joint_step_budget_rad[index]:
+            return 1.0, None, False
+        # Slow-down zone: earn the remaining allowance in proportion to how much is left.
+        remaining = 1.0 - (actual - self._joint_step_budget_rad[index]) / (
+            self._joint_lag_limit_rad[index] - self._joint_step_budget_rad[index]
+        )
+        scale = min(1.0, max(0.0, float(remaining)))
+        return scale, None, False
+
+    def _hold_damped_motion(self, feedback, *, lag_hold=False):
+        """Soft stop; keep the pending trajectory from advancing.
+
+        ``lag_hold=True`` is the tracking-allowance case. The command stream is frozen
+        rather than discarded: the arm keeps executing the command it already has, the gap
+        therefore only shrinks, and the next accepted step stays one small step away from
+        where the command stream already is. Only an explicit segment end (Grip release,
+        fault, singularity hold) drops the old command reference.
+        """
         # Stop the controller's already pending trajectory, not just the next Python target.
         if not self._dls_stopping and not self.dry_run:
             if not self.arm.slow_stop():
-                raise RuntimeError("DLS hold slow stop was not acknowledged")
+                raise RuntimeError("DLS 保持时的软停止未被控制器确认")
         self._dls_stopping = True
         self._singularity_hold = True
         self._dls_velocity = np.zeros(6)
-        self._last_accepted_joint_rad = None
+        if not lag_hold:
+            self._last_accepted_joint_rad = None
+            self._dls_seed_joint_rad = None
         limiter = self._self_test_limiter if self.self_test_ramp else self.limiter
         limiter.reset(feedback.tcp_xyz_m, feedback.tcp_quat_wxyz)
         self.arm.sync_command_reference(self.arm.xyz_quat_to_pose6(feedback.tcp_xyz_m, feedback.tcp_quat_wxyz))
@@ -827,12 +1017,28 @@ class RealmanRM65SafeTeleopController:
                 dls_consecutive_failures=self._dls_consecutive_failures,
                 joint_target_accepted=False,
             )
+        if self.log_motion_debug:
+            self._dls_debug = {
+                "status": "hold_budget",
+                "detail": exc.reason,
+                "ratio": None,
+                "severity": None,
+                "scale": 0.0,
+                "damping": None,
+                "hold": True,
+                "seed_rad": None,
+                "measured_rad": None,
+                "candidate_rad": None,
+                "fk_calls": exc.fk_calls,
+                "target_rad": None,
+                "achieved_xyz": None,
+            }
         now = self._monotonic()
         if now - self._last_singularity_report_t >= self.singularity_report_interval_s:
             print(
-                "[DLS] hold_budget "
-                f"failure={self._dls_consecutive_failures}/{self.dls_max_consecutive_failures} "
-                f"fk={exc.fk_calls} elapsed={exc.elapsed_s * 1000:.2f}ms reason={exc.reason}"
+                "[DLS] 预算不足保持 "
+                f"连续失败={self._dls_consecutive_failures}/{self.dls_max_consecutive_failures} "
+                f"fk={exc.fk_calls} 耗时={exc.elapsed_s * 1000:.2f}ms 原因={exc.reason}"
             )
             self._last_singularity_report_t = now
         if self._dls_consecutive_failures >= self.dls_max_consecutive_failures:
@@ -848,32 +1054,62 @@ class RealmanRM65SafeTeleopController:
             feedback = self._checked_feedback(self._monotonic(), require_fresh=True, check_tracking=True)
             if feedback is None:
                 return False
-            self.dls.begin_cycle(
-                deadline=started + self.dls.compute_budget_s,
-                max_fk_calls=self.dls.max_fk_calls,
-                enforce_budget=True,
-            )
             self._dls_frame_matches(feedback)
             # A new Grip/reset segment must not seed from a still-stopping arm.
             if self._dls_stopping or self._last_accepted_joint_rad is None:
                 if np.any(np.abs(feedback.joint_speed_rad_s) > self.rearm_stationary_speed_rad_s):
                     return self._hold_damped_motion(feedback)
+            # Decide the tracking-allowance governor before opening the DLS budget window:
+            # it is a scalar comparison over seven numbers, and running it inside the window
+            # would charge already-spent wall-clock time against this cycle's FK budget.
+            started_now = self._monotonic()
+            lag_scale, lag_reason, lag_holding = self._govern_tracking_lag(feedback.joint_rad, started_now)
+            self.dls.begin_cycle(
+                deadline=started + self.dls.compute_budget_s,
+                max_fk_calls=self.dls.max_fk_calls,
+                enforce_budget=True,
+            )
             seed = (
-                feedback.joint_rad if self._last_accepted_joint_rad is None else self._last_accepted_joint_rad
+                feedback.joint_rad if self._dls_seed_joint_rad is None else self._dls_seed_joint_rad
             ).copy()
             origin, orientation = self.dls.forward(seed)
             valid, reason = self.arm._pose_is_within_bounds(xyz)
             if not valid:
                 raise ValueError(reason)
+            if lag_holding:
+                # The command has used up the whole measured allowance. Stop the pending
+                # trajectory and wait for the arm instead of latching a fault: this is the
+                # ordinary servo-lag case, and it recovers by itself once the arm catches up.
+                if (
+                    self._lag_exceeded_since_t is not None
+                    and started_now - self._lag_exceeded_since_t > self.tracking_lag_hold_dwell_s
+                ):
+                    raise ValueError(f"跟随误差持续恶化（超过 {self.tracking_lag_hold_dwell_s:.2f}s）：{lag_reason}")
+                self._lag_hold_reason = lag_reason
+                now = self._monotonic()
+                if now - self._last_singularity_report_t >= self.singularity_report_interval_s:
+                    print(f"[DLS] hold_tracking_lag 原因={lag_reason}")
+                    self._last_singularity_report_t = now
+                if self._diagnostic_row is not None:
+                    self._diagnostic_row.update(
+                        dls_status="hold_tracking_lag",
+                        singularity_hold=True,
+                        lag_speed_scale=0.0,
+                        lag_hold_reason=lag_reason,
+                        joint_target_accepted=False,
+                    )
+                self._hold_damped_motion(feedback, lag_hold=True)
+                return False
             result = self.dls.step(
                 xyz,
                 quat,
                 seed,
                 self.dt,
-                self.model_spec.max_joint_velocity_rad_s * self.max_joint_speed_ratio,
+                self._dls_joint_velocity_limit_rad_s,
                 previous_velocity=self._dls_velocity,
                 max_linear_speed=self.max_linear_velocity_m_s,
                 max_angular_speed=self.max_angular_velocity_rad_s,
+                lag_speed_scale=lag_scale,
                 reset_cycle=False,
             )
             severity = self.dls.severity(result.ratio, np.abs(seed[[2, 4]]))
@@ -897,64 +1133,126 @@ class RealmanRM65SafeTeleopController:
                     dls_status=result.status,
                     dls_fk_calls=self.dls.fk_calls,
                     dls_candidate_attempts=self.dls.candidate_attempts,
+                    lag_speed_scale=lag_scale,
                 )
+            if self.log_motion_debug:
+                self._dls_debug = {
+                    "status": result.status,
+                    "detail": result.detail,
+                    "ratio": result.ratio,
+                    "severity": severity,
+                    "scale": result.scale,
+                    "lag_scale": lag_scale,
+                    "damping": result.damping,
+                    "hold": result.hold,
+                    "seed_rad": np.asarray(seed, dtype=float).copy(),
+                    "measured_rad": np.asarray(feedback.joint_rad, dtype=float).copy(),
+                    "candidate_rad": np.asarray(result.joint_rad, dtype=float).copy(),
+                    "fk_calls": self.dls.fk_calls,
+                    "target_rad": None,
+                    "achieved_xyz": None,
+                }
             now = self._monotonic()
             if now - self._last_singularity_report_t >= self.singularity_report_interval_s:
-                if result.hold or result.scale < 1 or self.log_motion_debug:
-                    print(f"[DLS] {result.status} ratio={result.ratio:.5f} scale={result.scale:.3f}")
+                # Only report a slow-down or a hold; normal tracking stays one line per change.
+                if result.hold or result.scale < 1:
+                    print(
+                        f"[DLS] {result.status} 奇异比={result.ratio:.5f} 速度缩放={result.scale:.3f} "
+                        f"严重度={severity:.2f}" + (f" 原因={result.detail}" if result.detail else "")
+                    )
                     self._last_singularity_report_t = now
             if result.hold:
+                self._lag_holding = False
                 return self._hold_damped_motion(feedback)
             # Match the actual wire resolution before performing final safety checks.
             target = np.deg2rad(np.round(np.rad2deg(result.joint_rad) * 1000) / 1000)
-            if np.max(np.abs(target - seed)) < 1e-10:
-                return self._hold_damped_motion(feedback)
-            if not self.dls.bounded_path_allowed(
+            blocked = "步长低于 0.001° 下发分辨率" if np.max(np.abs(target - seed)) < 1e-10 else None
+            if blocked is None and not self.dls.bounded_path_allowed(
                 seed,
                 target,
                 ratio=result.ratio,
                 angles=np.abs(seed[[2, 4]]),
+                lag_limit_rad=self._joint_lag_limit_rad,
             ):
+                blocked = "奇异路径守卫"
+            if blocked is None:
+                # The actual FK pose, not the unreachable requested pose, is the next reference.
+                achieved_xyz, achieved_quat = self.dls.forward(target)
+                valid, reason = self.arm._pose_is_within_bounds(achieved_xyz)
+                if not valid:
+                    raise ValueError(reason)
+                linear = (achieved_xyz - origin) / self.dt
+                angular = shortest_world_rotation_vector(orientation, achieved_quat) / self.dt
+                if (
+                    np.linalg.norm(linear) > self.max_linear_velocity_m_s + 1e-6
+                    or np.linalg.norm(angular) > self.max_angular_velocity_rad_s + 1e-6
+                ):
+                    blocked = "命令速度超出笛卡尔限值"
+            if blocked is not None:
+                if blocked == "奇异路径守卫":
+                    return self._hold_damped_motion(feedback)
+                # The command stream is frozen even though the operator is asking for motion.
+                # While the lag governor is active it means the arm is not closing the lead at
+                # all; the slow-down zone can hide that behind an ever-smaller step.
+                self._command_stalled_cycles = self._command_stalled_cycles + 1 if lag_holding else 0
+                if self._command_stalled_cycles >= self.max_command_stall_cycles:
+                    raise ValueError(
+                        f"命令流停滞后手臂仍未跟上（连续 {self._command_stalled_cycles} 个周期）："
+                        f"{self._lag_hold_reason or '命令步长低于下发分辨率'}"
+                    )
                 return self._hold_damped_motion(feedback)
-            # The actual FK pose, not the unreachable requested pose, is the next reference.
-            achieved_xyz, achieved_quat = self.dls.forward(target)
-            valid, reason = self.arm._pose_is_within_bounds(achieved_xyz)
-            if not valid:
-                raise ValueError(reason)
-            linear = (achieved_xyz - origin) / self.dt
-            angular = shortest_world_rotation_vector(orientation, achieved_quat) / self.dt
-            if (
-                np.linalg.norm(linear) > self.max_linear_velocity_m_s + 1e-6
-                or np.linalg.norm(angular) > self.max_angular_velocity_rad_s + 1e-6
-            ):
-                return self._hold_damped_motion(feedback)
+            self._command_stalled_cycles = 0
             # Refresh after potentially expensive FK calls; do not send a late or stale target.
             fresh = self._checked_feedback(self._monotonic(), require_fresh=True, check_tracking=True)
             if fresh is None:
                 return False
             self._dls_frame_matches(fresh)
-            for reference in (seed, fresh.joint_rad):
-                if np.any(np.abs(target - reference) > self._joint_step_budget_rad + 1e-9):
-                    raise ValueError("DLS joint command continuity / measured feedback step exceeded limit")
+            # Criterion 1 - command continuity: one sent command may differ from the previous
+            # one by at most one control period of joint velocity. This is the real speed gate.
+            for reference, label in ((seed, "上一命令连续性"), (fresh.joint_rad, "实测反馈")):
+                step_rad = np.abs(target - reference)
+                limit = self._joint_step_budget_rad if label == "上一命令连续性" else self._joint_lag_limit_rad
+                violations = np.flatnonzero(step_rad > limit + 1e-9)
+                if violations.size:
+                    index = int(violations[0])
+                    # The target may never lead the measured joints by more than the lag
+                    # allowance, so a stationary arm cannot support an unbounded dry-run replay.
+                    hint = (
+                        "（dry run 下真机不动，松开再握 Grip 可重新对齐）"
+                        if self.dry_run and label == "实测反馈"
+                        else ""
+                    )
+                    raise ValueError(
+                        f"DLS J{index + 1} 单步超限（对比{label}）："
+                        f"{math.degrees(float(step_rad[index])):.3f}° > "
+                        f"{math.degrees(float(limit[index])):.3f}°{hint}"
+                    )
             if not self.dls.bounded_path_allowed(
                 fresh.joint_rad,
                 target,
                 ratio=result.ratio,
                 angles=np.abs(fresh.joint_rad[[2, 4]]),
+                lag_limit_rad=self._joint_lag_limit_rad,
             ):
                 return self._hold_damped_motion(fresh)
-            self.dls.check_budget("final admission")
+            self.dls.check_budget("最终准入")
             if not self.dry_run:
                 if not self.arm.send_movej_follow_joint_rad(target.copy(), active=True) or self.arm.fault_latched:
-                    raise RuntimeError("DLS joint target submission failed")
+                    raise RuntimeError("DLS 关节目标下发失败")
             self.arm.sync_command_reference(self.arm.xyz_quat_to_pose6(achieved_xyz, achieved_quat))
             limiter = self._self_test_limiter if self.self_test_ramp else self.limiter
             limiter.rebase(achieved_xyz, achieved_quat, linear, angular)
             self._dls_velocity = (target - seed) / self.dt
+            self._dls_seed_joint_rad = target.copy()
             self._last_accepted_joint_rad = target.copy()
             self._dls_consecutive_failures = 0
             self._singularity_hold = False
+            self._lag_hold_reason = None
             self._dls_stopping = False
+            if self._dls_debug is not None:
+                self._dls_debug.update(
+                    target_rad=np.asarray(target, dtype=float).copy(), achieved_xyz=achieved_xyz.copy()
+                )
             if self._diagnostic_row is not None:
                 self._diagnostic_row.update(
                     joint_target_accepted=True,
@@ -972,7 +1270,7 @@ class RealmanRM65SafeTeleopController:
                 return False
             return self._degrade_damped_motion(feedback, exc)
         except Exception as exc:
-            self._latch_safety_fault(f"DLS rejected motion: {exc}")
+            self._latch_safety_fault(f"DLS 拒绝本次运动：{exc}")
             return False
         finally:
             self.dls.end_cycle()
@@ -996,12 +1294,12 @@ class RealmanRM65SafeTeleopController:
                 if self._diagnostic_row is not None:
                     self._diagnostic_row["joint_target_accepted"] = False
                 if self.arm.fault_latched:
-                    self._enter_rearm(require_button=True)
+                    self._enter_rearm()
                     return False
                 if self._rearm_required:
                     return False
                 if measured_joint_rad is None:
-                    self._latch_safety_fault("official RM65 IK requires current UDP joint feedback")
+                    self._latch_safety_fault("官方 RM65 IK 需要当前的 UDP 关节反馈")
                     return False
                 target_joint_rad = self._solve_joint_target(xyz, quat, measured_joint_rad)
                 if target_joint_rad is None:
@@ -1010,13 +1308,11 @@ class RealmanRM65SafeTeleopController:
                     try:
                         sent = self.arm.send_movej_follow_joint_rad(target_joint_rad.copy(), active=True)
                         if not sent or self.arm.fault_latched:
-                            self._latch_safety_fault(
-                                self.arm.fault_reason or "official RM65 joint target submission failed"
-                            )
+                            self._latch_safety_fault(self.arm.fault_reason or "官方 RM65 关节目标下发失败")
                             return False
                         self.arm.sync_command_reference(self.arm.xyz_quat_to_pose6(xyz, quat))
                     except Exception as exc:
-                        self._latch_safety_fault(f"official RM65 joint target submission failed: {exc}")
+                        self._latch_safety_fault(f"官方 RM65 关节目标下发失败：{exc}")
                         return False
                 # In dry-run this is a virtual acceptance only; feedback checks still
                 # apply, so a stationary real arm cannot support an unbounded replay.
@@ -1047,23 +1343,165 @@ class RealmanRM65SafeTeleopController:
                     transport=getattr(self.arm, "motion_diagnostic", None),
                 )
 
+    def _plan_fixed_joint_reset(self, start_joint_rad: np.ndarray) -> float:
+        """Estimate the trip time to a fixed joint home; optionally reject unsafe paths.
+
+        With ``enable_home_path_preflight`` the sampled singular/workspace verdicts are
+        hard rejections. With the preflight disabled they degrade to console warnings
+        (the caller then sends the joint-space interpolation directly), so the arm can
+        still be homed from the far side of a J3/J5 zero without a pendant.
+        """
+        if self.dls is None or self.home_joint_rad is None:
+            raise RuntimeError("固定六轴回位需要 DLS 模式")
+        delta = self.home_joint_rad - start_joint_rad
+        # Any continuous joint-space path to this home sweeps J3 and J5 through the
+        # +/-5deg hard zone from the far side. Report the offending axis with both
+        # endpoints: the operator has to jog the arm to the home side by hand (pendant
+        # or drag) when the preflight is enabled, because no guarded path exists here.
+        crossings = []
+        for name, index in (("J3", 2), ("J5", 4)):
+            start_rad = float(start_joint_rad[index])
+            home_rad = float(self.home_joint_rad[index])
+            if start_rad * home_rad < 0.0:
+                crossings.append(f"{name} 起点={math.degrees(start_rad):+.3f}° Home={math.degrees(home_rad):+.3f}°")
+        if crossings and self.enable_home_path_preflight:
+            raise ValueError(
+                "关节回位路径穿越 J3/J5 零位（"
+                + "；".join(crossings)
+                + "）；请先用示教器或拖动把该轴挪到 Home 一侧，再重试回位"
+            )
+        sample_count = max(1, int(math.ceil(np.max(np.abs(np.rad2deg(delta))) / 5.0)))
+        linear_length = 0.0
+        angular_length = 0.0
+        previous_pose = None
+        if not self.enable_home_path_preflight:
+            # One diagnostic sweep only: never blocks, never latches, and any failure
+            # here still leaves the reset itself untouched.
+            self.dls.begin_cycle()
+        hard_sample = None
+        outside_sample = None
+        for index in range(sample_count + 1):
+            joint = start_joint_rad + delta * (index / sample_count)
+            if self.enable_home_path_preflight:
+                self.dls.begin_cycle()
+                ratio, angles = self.dls.metrics(joint)
+                if ratio <= self.dls.stop_ratio or np.any(angles <= self.dls.stop_joint_rad):
+                    raise ValueError(f"关节回位路径在第 {index}/{sample_count} 个采样点进入奇异硬区")
+            elif hard_sample is None:
+                try:
+                    ratio, angles = self.dls.metrics(joint)
+                except Exception:
+                    ratio = None
+                if ratio is not None and (ratio <= self.dls.stop_ratio or np.any(angles <= self.dls.stop_joint_rad)):
+                    hard_sample = (index, sample_count, ratio)
+            pose = self.dls.kinematics.forward(joint)
+            valid, reason = self.arm._pose_is_within_bounds(pose[0])
+            if not valid:
+                if self.enable_home_path_preflight:
+                    raise ValueError(f"关节回位路径在第 {index}/{sample_count} 个采样点越出 TCP 工作空间：{reason}")
+                if outside_sample is None:
+                    outside_sample = (index, sample_count, reason)
+            if previous_pose is not None:
+                linear_length += float(np.linalg.norm(pose[0] - previous_pose[0]))
+                angular_length += float(np.linalg.norm(shortest_world_rotation_vector(previous_pose[1], pose[1])))
+            previous_pose = pose
+        if not self.enable_home_path_preflight:
+            print(
+                "[HOME] 回位路径预检已关闭（--home-path-preflight 可重新开启）："
+                "不拒绝 J3/J5 零位穿越、奇异硬区与 TCP 工作空间越界；"
+                "回位改为关节空间插值直发，逐周期的 UDP 新鲜度/跟踪误差/关节限位/超速检查仍然生效"
+            )
+            if crossings:
+                print("[HOME] 注意：本次回位将穿越 J3/J5 零位（" + "；".join(crossings) + "）")
+            if hard_sample is not None:
+                index, total, ratio = hard_sample
+                print(f"[HOME] 注意：回位路径第 {index}/{total} 个采样点进入奇异硬区（奇异比={ratio:.5f}）")
+            if outside_sample is not None:
+                index, total, reason = outside_sample
+                print(f"[HOME] 注意：回位路径第 {index}/{total} 个采样点越出 TCP 工作空间：{reason}")
+        joint_speed = self.model_spec.max_joint_velocity_rad_s * self.max_joint_speed_ratio
+        minimum_motion_s = max(
+            float(np.max(np.abs(delta) / joint_speed)),
+            linear_length / self.max_linear_velocity_m_s,
+            angular_length / self.max_angular_velocity_rad_s,
+        )
+        return max(self.reset_duration_s, 2.0 * minimum_motion_s)
+
+    def _send_home_joint_waypoint(
+        self,
+        waypoint_rad: np.ndarray,
+        waypoint_xyz: np.ndarray,
+        waypoint_quat: np.ndarray,
+    ) -> bool:
+        """Send one fixed-Home joint waypoint straight to ``movej_follow``.
+
+        Only used while the reset preflight is disabled: the DLS singularity guard
+        rejects any step across a J3/J5 zero, so a reset that starts on the far side of
+        one would hold forever and then latch a timeout. The per-cycle protections that
+        do not depend on the DLS solver still run in the teleop loop: UDP freshness,
+        tracking error, joint limits/overspeed and controller error codes. Joint speed
+        is bounded because the reset duration is derived from the joint-speed limit.
+        """
+        if self.arm.fault_latched:
+            return False
+        valid, reason = self.model_spec.validate_joint_feedback(np.asarray(waypoint_rad, dtype=float), 0.0)
+        if not valid:
+            self._latch_safety_fault(f"固定六轴 Home 回位插值越界：{reason}")
+            return False
+        started = self._monotonic()
+        sent = True
+        if not self.dry_run:
+            sent = bool(self.arm.send_movej_follow_joint_rad(waypoint_rad.copy(), active=True))
+            if not sent or self.arm.fault_latched:
+                self._latch_safety_fault(self.arm.fault_reason or "固定六轴 Home 关节目标下发失败")
+                return False
+        # The tracking check compares measured TCP against this reference; a joint
+        # command does not update it by itself.
+        self.arm.sync_command_reference(self.arm.xyz_quat_to_pose6(waypoint_xyz, waypoint_quat))
+        self._last_accepted_joint_rad = np.asarray(waypoint_rad, dtype=float).copy()
+        self._dls_velocity = np.zeros(6)
+        self._dls_stopping = False
+        if self._diagnostic_row is not None:
+            seed = self._reset_start_joint_rad if self._reset_start_joint_rad is not None else waypoint_rad
+            self._diagnostic_row.update(
+                joint_target_accepted=True,
+                joint_seed_rad=np.asarray(seed, dtype=float).tolist(),
+                joint_candidate_rad=np.asarray(waypoint_rad, dtype=float).tolist(),
+                dls_status="home_joint_direct",
+                dls_achieved_xyz=np.asarray(waypoint_xyz, dtype=float).tolist(),
+                dls_achieved_quat_wxyz=np.asarray(waypoint_quat, dtype=float).tolist(),
+                send_started_monotonic=started,
+                send_duration_s=max(0.0, self._monotonic() - started),
+                send_result=sent,
+            )
+        return True
+
     def _start_reset(self, feedback: ArmFeedback) -> None:
         if self.home_xyz is None or self.home_quat is None:
-            self._latch_safety_fault("reset home pose is unavailable")
+            self._latch_safety_fault("回位目标位姿不可用")
             return
         self.grip_active = False
         self._clear_anchor()
         try:
             if not self.dry_run and not self.arm.slow_stop():
-                raise RuntimeError("stop was not acknowledged")
+                raise RuntimeError("软停止未被控制器确认")
             self._dls_stopping = self.dls is not None
         except Exception as exc:
-            self._latch_safety_fault(f"RM65 slow stop failed before reset: {exc}")
+            self._latch_safety_fault(f"回位前的 RM65 软停止失败：{exc}")
             return
         self._reset_start_xyz = feedback.tcp_xyz_m.copy()
         self._reset_start_quat = feedback.tcp_quat_wxyz.copy()
+        self._reset_start_joint_rad = None
+        # A B press can arrive while the arm is still moving. Plan only after a
+        # fresh UDP frame confirms the slow stop has completed.
+        self._reset_waiting_for_stop = self.home_joint_rad is not None
+        self._reset_duration_actual_s = self.reset_duration_s
         self.limiter.reset(feedback.tcp_xyz_m, feedback.tcp_quat_wxyz)
-        # Every return target goes through the same guarded _send_motion path.
+        # The same rule as a new teleop segment: a reset commands the arm from where it
+        # actually is, so the previous segment's command reference is replaced here too.
+        self.arm.sync_command_reference(self.arm.xyz_quat_to_pose6(feedback.tcp_xyz_m, feedback.tcp_quat_wxyz))
+        # Return targets go through the guarded _send_motion path unless the fixed-Home
+        # preflight is disabled, in which case they are sent as joint-space waypoints.
         self.limiter.set_speed_scale(1.0)
         self._singularity_zone = "clear"
         self._singularity_hold = False
@@ -1071,7 +1509,10 @@ class RealmanRM65SafeTeleopController:
         self._reset_step = 0
         self._reset_started_t = self._monotonic()
         self._resetting = True
-        print(f"[RESET] returning to startup pose over at least {self.reset_duration_s:.2f}s")
+        if self._reset_waiting_for_stop:
+            print("[RESET] 等待 UDP 反馈确认机械臂已静止，再做固定六轴 Home 回位规划")
+        else:
+            print(f"[RESET] 正在返回启动 TCP 位姿，最短耗时 {self.reset_duration_s:.2f}s")
 
     def _tick_reset(self, now: float, feedback: ArmFeedback) -> None:
         if (
@@ -1082,41 +1523,90 @@ class RealmanRM65SafeTeleopController:
             or self.home_quat is None
         ):
             return
+        if self._reset_waiting_for_stop:
+            if np.any(np.abs(feedback.joint_speed_rad_s) > self.rearm_stationary_speed_rad_s):
+                if now - self._reset_started_t > self.reset_settle_timeout_s:
+                    self._latch_safety_fault("固定六轴 Home 回位规划前 RM65 未停下")
+                return
+            try:
+                duration = self._plan_fixed_joint_reset(feedback.joint_rad)
+            except Exception as exc:
+                self._latch_safety_fault(f"固定六轴 Home 回位规划失败：{exc}")
+                return
+            self._reset_start_xyz = feedback.tcp_xyz_m.copy()
+            self._reset_start_quat = feedback.tcp_quat_wxyz.copy()
+            self._reset_start_joint_rad = feedback.joint_rad.copy()
+            self._reset_duration_actual_s = duration
+            self._reset_steps_total = max(1, int(math.ceil(duration / self.dt)))
+            self._reset_step = 0
+            self._reset_started_t = now
+            self._reset_waiting_for_stop = False
+            self.limiter.reset(feedback.tcp_xyz_m, feedback.tcp_quat_wxyz)
+            print(f"[RESET] 正在返回固定六轴 Home，最短耗时 {duration:.2f}s")
         alpha = min(1.0, self._reset_step / self._reset_steps_total)
         smooth = alpha * alpha * (3.0 - 2.0 * alpha)
-        target_xyz = self._reset_start_xyz + smooth * (self.home_xyz - self._reset_start_xyz)
-        delta_rot = quat_diff_as_angle_axis(self._reset_start_quat, self.home_quat) * smooth
-        _, target_quat = apply_delta_pose(
-            self._reset_start_xyz,
-            self._reset_start_quat,
-            np.zeros(3),
-            delta_rot,
-        )
-        command_xyz, command_quat = self.limiter.step(target_xyz, target_quat, self.dt)
-        self._record_target(target_xyz, target_quat)
-        if not self._send_motion(command_xyz, command_quat, feedback.joint_rad):
+        if self.home_joint_rad is not None:
+            if self._reset_start_joint_rad is None:
+                self._latch_safety_fault("缺少回位的起始关节角")
+                return
+            waypoint = self._reset_start_joint_rad + smooth * (self.home_joint_rad - self._reset_start_joint_rad)
+            target_xyz, target_quat = self.dls.kinematics.forward(waypoint)
+            self._record_target(target_xyz, target_quat)
+            if self.enable_home_path_preflight:
+                command_xyz, command_quat = self.limiter.step(target_xyz, target_quat, self.dt)
+                accepted = self._send_motion(command_xyz, command_quat, feedback.joint_rad)
+            else:
+                # Joint-space interpolation sent straight to movej_follow: the DLS guard
+                # rejects every step across a J3/J5 zero, so the guarded path can never
+                # finish a reset that starts on the far side of one.
+                accepted = self._send_home_joint_waypoint(waypoint, target_xyz, target_quat)
+        else:
+            target_xyz = self._reset_start_xyz + smooth * (self.home_xyz - self._reset_start_xyz)
+            delta_rot = quat_diff_as_angle_axis(self._reset_start_quat, self.home_quat) * smooth
+            _, target_quat = apply_delta_pose(
+                self._reset_start_xyz,
+                self._reset_start_quat,
+                np.zeros(3),
+                delta_rot,
+            )
+            command_xyz, command_quat = self.limiter.step(target_xyz, target_quat, self.dt)
+            self._record_target(target_xyz, target_quat)
+            accepted = self._send_motion(command_xyz, command_quat, feedback.joint_rad)
+        if not accepted:
             self._resetting = False
-            self._enter_rearm(require_button=True)
+            self._startup_homing = False
+            self._reset_waiting_for_stop = False
+            self._enter_rearm()
             return
         self._reset_step += 1
         if alpha < 1.0:
             return
         position_error = float(np.linalg.norm(self.home_xyz - feedback.tcp_xyz_m))
         rotation_error = float(np.linalg.norm(quat_diff_as_angle_axis(feedback.tcp_quat_wxyz, self.home_quat)))
-        if position_error <= self.reset_position_tolerance_m and rotation_error <= self.reset_rotation_tolerance_rad:
+        joint_error = (
+            0.0 if self.home_joint_rad is None else float(np.max(np.abs(self.home_joint_rad - feedback.joint_rad)))
+        )
+        if (
+            position_error <= self.reset_position_tolerance_m
+            and rotation_error <= self.reset_rotation_tolerance_rad
+            and joint_error <= self.home_joint_tolerance_rad
+        ):
             self._resetting = False
+            self._startup_homing = False
+            self._reset_waiting_for_stop = False
             self._reset_start_xyz = None
             self._reset_start_quat = None
+            self._reset_start_joint_rad = None
             self._reset_started_t = None
             self._clear_anchor()
-            self._enter_rearm(require_button=False)
-            print("[RESET] complete; release and re-grip to resume teleoperation")
+            self._enter_rearm(require_fresh_release=False)
+            print("[RESET] 回位完成；松开 Grip 再重新握持即可恢复遥操作")
             return
         if (
             self._reset_started_t is not None
-            and now - self._reset_started_t > self.reset_duration_s + self.reset_settle_timeout_s
+            and now - self._reset_started_t > self._reset_duration_actual_s + self.reset_settle_timeout_s
         ):
-            self._latch_safety_fault("RM65 reset did not reach home before timeout")
+            self._latch_safety_fault("RM65 回位未在超时前到达 Home")
 
     def _feedback_allows_rearm(self, now: float) -> bool:
         if self.feedback_receiver.thread_error is not None:
@@ -1137,23 +1627,21 @@ class RealmanRM65SafeTeleopController:
             return False
         return bool(np.all(np.abs(feedback.joint_speed_rad_s) <= self.rearm_stationary_speed_rad_s))
 
-    def _handle_rearm(self, grip: float, reset_edge: bool, now: float) -> None:
-        if grip <= self.grip_off_threshold:
-            self._rearm_release_seen = True
-        if not self._rearm_release_seen:
+    def _handle_rearm(self, grip: float, now: float) -> None:
+        # Releasing Grip is the only operator gesture for re-arm. B is reserved
+        # for reset and is ignored while a fault is latched.
+        if grip >= self.grip_on_threshold:
+            self._rearm_seen_pressed = True
             return
-        if self._rearm_button_required:
-            if not reset_edge:
-                return
-            if not self._feedback_allows_rearm(now):
-                print("[SAFETY] B ignored: wait for fresh, error-free, stationary joint feedback")
-                return
+        if grip > self.grip_off_threshold or not self._rearm_seen_pressed:
+            return
+        if not self._feedback_allows_rearm(now):
+            return
         self.arm.clear_fault()
         self._rearm_required = False
-        self._rearm_release_seen = False
-        self._rearm_button_required = False
+        self._rearm_seen_pressed = False
         self._clear_anchor()
-        print("[SAFETY] re-arm acknowledged; press Grip again to move")
+        print("[SAFETY] 已解除锁存；请再次握 Grip 开始运动")
 
     def _record_target(self, xyz, quat):
         if self._diagnostic_row is not None:
@@ -1168,6 +1656,11 @@ class RealmanRM65SafeTeleopController:
 
     def _run_cycle(self, now: float) -> None:
         self._singularity_hold = False
+        if self.log_motion_debug:
+            # Drop the previous cycle's snapshot so a stale DLS result is never reported as current.
+            self._debug_xr_delta_m = None
+            self._debug_xr_delta_rot_rad = None
+            self._dls_debug = None
         if self._motion_log is None:
             if self.self_test_ramp:
                 self._tick_self_test(now)
@@ -1210,6 +1703,7 @@ class RealmanRM65SafeTeleopController:
             "singularity_predicted_ratio": None,
             "singularity_severity": None,
             "singularity_speed_scale": None,
+            "lag_speed_scale": None,
             "singularity_damping": None,
             "singularity_step_scale": None,
             "singularity_inward": None,
@@ -1279,19 +1773,22 @@ class RealmanRM65SafeTeleopController:
                     self.arm.slow_stop()
                 return
             if elapsed > duration + self.reset_settle_timeout_s:
-                self._latch_safety_fault("self-test did not reach endpoint before timeout")
+                self._latch_safety_fault("自检未在超时前到达终点")
                 self._self_test_done = True
                 return
         target = self._self_test_origin + direction * min(self.self_test_distance_m, self._self_test_speed * elapsed)
         command, quat = self._self_test_limiter.step(target, self._self_test_quat, self.dt)
         valid, reason = self.arm._pose_is_within_bounds(command)
-        if not valid or np.linalg.norm(command - self._self_test_origin) > self.max_offset_m + 1e-12:
-            self._latch_safety_fault(reason or "self-test command exceeds max_offset_m")
+        beyond_envelope = self.max_offset_m is not None and (
+            np.linalg.norm(command - self._self_test_origin) > self.max_offset_m + 1e-12
+        )
+        if not valid or beyond_envelope:
+            self._latch_safety_fault(reason or "自检命令超出 max_offset_m")
             self._self_test_done = True
             return
         self._record_target(target, self._self_test_quat)
         if not self._send_motion(command, quat, feedback.joint_rad):
-            self._enter_rearm(require_button=True)
+            self._enter_rearm()
             self._self_test_done = True
 
     def _read_control_state(self) -> tuple[float, bool]:
@@ -1319,10 +1816,86 @@ class RealmanRM65SafeTeleopController:
         self._clear_anchor()
         try:
             if not self.dry_run and not self.arm.slow_stop():
-                raise RuntimeError("stop was not acknowledged")
+                raise RuntimeError("软停止未被控制器确认")
             self._dls_stopping = self.dls is not None
         except Exception as exc:
-            self._latch_safety_fault(f"RM65 slow stop failed on Grip release: {exc}")
+            self._latch_safety_fault(f"松开 Grip 时的 RM65 软停止失败：{exc}")
+
+    @staticmethod
+    def _preview_list(values, digits: int = 4, scale: float = 1.0) -> list[float]:
+        return [float(value) for value in np.round(np.asarray(values, dtype=float) * scale, digits)]
+
+    def _preview_verdict(self, info: dict, accepted: bool) -> str:
+        """One short token for what this cycle did; the long explanation stays in the [DLS] line."""
+        if self._lag_hold_reason is not None:
+            return "保持(跟随余量用尽)"
+        if info is not None and info["hold"]:
+            status = info["status"]
+            if status == "hold_singularity":
+                stop_ratio = self.dls.stop_ratio
+                reason = "奇异硬停区" if info["ratio"] is not None and info["ratio"] <= stop_ratio else "无可用步"
+            else:
+                reason = {
+                    "hold_at_target": "已到达目标",
+                    "hold_joint_margin": "接近限位",
+                    "hold_budget": "计算预算不足",
+                }.get(status, status.removeprefix("hold_"))
+            return f"保持({reason})"
+        if accepted:
+            return "已接受(未下发)" if self.dry_run else "已接受"
+        return "被拒绝"
+
+    def _print_motion_preview(
+        self,
+        grip: float,
+        feedback: ArmFeedback,
+        delta_xyz: np.ndarray,
+        delta_rot: np.ndarray,
+        target_xyz: np.ndarray,
+        accepted: bool,
+    ) -> None:
+        """Two compact lines for the XR -> target -> DLS joint chain, and only when they change."""
+        tag = getattr(self, "preview_mode", "DRY-RUN" if self.dry_run else "LIVE")
+        head = f"[指令 {tag}] 握持={grip:.2f}"
+        if self._current_rotation_gain < 0.999:
+            head += f" 旋转增益={self._current_rotation_gain:.2f}"
+        if self._debug_xr_delta_m is not None:
+            head += f" 手柄位移mm={self._preview_list(self._debug_xr_delta_m, 1, 1000.0)}"
+        head += f" 目标位移mm={self._preview_list(delta_xyz, 1, 1000.0)}"
+        head += f" 目标旋转°={self._preview_list(np.rad2deg(delta_rot), 1)}"
+        head += f" 实测误差mm={float(np.linalg.norm(target_xyz - feedback.tcp_xyz_m)) * 1000.0:.1f}"
+        info = self._dls_debug
+        if info is None:
+            tail = f"  DLS=不适用({self.motion_command})"
+        else:
+            tail = f"  DLS={info['status']}"
+            if info["ratio"] is not None:
+                tail += f" 奇异比={info['ratio']:.5f}"
+            if info["scale"] < 1.0:
+                tail += f" 速度缩放={info['scale']:.2f}"
+            if info.get("lag_scale", 1.0) < 1.0:
+                tail += f" 跟随缩放={info['lag_scale']:.2f}"
+            candidate = info["target_rad"] if info["target_rad"] is not None else info["candidate_rad"]
+            if candidate is None:
+                tail += " 关节=无"
+            else:
+                tail += f" 关节°={self._preview_list(np.rad2deg(candidate), 2)}"
+                if info["target_rad"] is not None and info["seed_rad"] is not None:
+                    step_deg = float(np.max(np.abs(np.rad2deg(info["target_rad"] - info["seed_rad"]))))
+                    tail += f" 步长°={step_deg:.3f}"
+                measured = info.get("measured_rad")
+                if measured is not None:
+                    # Direct predictor of the continuity guard: it latches above one step budget.
+                    gap_deg = float(np.max(np.abs(np.rad2deg(candidate - measured))))
+                    tail += f" 超前°={gap_deg:.3f}"
+        tail += f" -> {self._preview_verdict(info, accepted)}"
+        if self.arm.fault_latched:
+            tail += f" 故障={getattr(self.arm, 'fault_reason', None)}"
+        text = head + "\n" + tail
+        if text == self._last_preview_text:
+            return
+        self._last_preview_text = text
+        print(text)
 
     def _send_xr_target(self, now: float, grip: float, feedback: ArmFeedback, xr_pose: np.ndarray) -> None:
         """Transform one accepted XR sample, limit it, then submit one motion command."""
@@ -1335,39 +1908,27 @@ class RealmanRM65SafeTeleopController:
         )
         command_xyz, command_quat = self.limiter.step(target_xyz, target_quat, self.dt)
         self._record_target(target_xyz, target_quat)
+        accepted = self._send_motion(command_xyz, command_quat, feedback.joint_rad)
         if self.log_motion_debug and now - self._last_motion_preview_t >= 0.2:
             self._last_motion_preview_t = now
-            # Same transformed controller frame as the mapping, before scale/deadzone.
-            xr_delta = self.R_headset_world @ np.asarray(xr_pose[:3]) - self.ref_ctrl_xyz
-            print(
-                f"[CMD {'DRY-RUN' if self.dry_run else 'LIVE'}] grip={grip:.2f} "
-                f"xr_delta_m={np.round(xr_delta, 4).tolist()} "
-                f"target_delta_m={np.round(delta_pos, 4).tolist()}\n"
-                f"  target_xyz_m={np.round(target_xyz, 4).tolist()} "
-                f"command_xyz_m={np.round(command_xyz, 4).tolist()} "
-                f"udp_xyz_m={np.round(feedback.tcp_xyz_m, 4).tolist()}\n"
-                f"  target_rotvec_deg={np.round(np.rad2deg(delta_rot), 2).tolist()} "
-                f"target_quat_wxyz={np.round(target_quat, 4).tolist()} "
-                f"command_quat_wxyz={np.round(command_quat, 4).tolist()} "
-                f"rot_gain={self._current_rotation_gain:.2f} "
-                f"fb_age={self._feedback_age(now):.3f}s"
-            )
-        if not self._send_motion(command_xyz, command_quat, feedback.joint_rad):
-            self._enter_rearm(require_button=True)
+            # Printed after the send so the console write cannot delay this cycle's command.
+            self._print_motion_preview(grip, feedback, delta_pos, delta_rot, target_xyz, accepted)
+        if not accepted:
+            self._enter_rearm()
 
     def _run_teleop_cycle(self, now: float) -> None:
-        grip, reset_edge = self._read_control_state()
+        grip, reset_edge = (0.0, False) if self._startup_homing else self._read_control_state()
 
         if self.arm.fault_latched and not self._rearm_required:
-            self._enter_rearm(require_button=True)
+            self._enter_rearm()
 
         if self._rearm_required:
-            self._handle_rearm(grip, reset_edge, now)
+            self._handle_rearm(grip, now)
             return
 
         if self._resetting:
-            if not self._xr_sample_is_fresh(now):
-                self._latch_safety_fault("XR tracking sample became stale during reset")
+            if not self._startup_homing and not self._xr_sample_is_fresh(now):
+                self._latch_safety_fault("回位过程中 XR 追踪样本过期")
                 return
             feedback = self._checked_feedback(now, require_fresh=True, check_tracking=True)
             if feedback is not None:
@@ -1391,10 +1952,14 @@ class RealmanRM65SafeTeleopController:
             return
 
         if not self._xr_sample_is_fresh(now):
-            self._latch_safety_fault("XR tracking sample is stale or missing")
+            self._latch_safety_fault("XR 追踪样本过期或缺失")
             return
 
-        feedback = self._checked_feedback(now, require_fresh=True, check_tracking=True)
+        # A new segment has not commanded anything yet, so its first check must not be held
+        # against the command reference left over from the previous segment: after a fault,
+        # re-arm, pendant jog or drag, the arm is legitimately somewhere else. The anchor
+        # below re-syncs that reference to the measured pose before any motion is computed.
+        feedback = self._checked_feedback(now, require_fresh=True, check_tracking=was_active)
         if feedback is None:
             return
 
@@ -1403,7 +1968,7 @@ class RealmanRM65SafeTeleopController:
             self._diagnostic_row["xr_pose"] = np.asarray(xr_pose).tolist()
             self._diagnostic_row["xr_pose_used"] = True
         if xr_pose is None:
-            self._latch_safety_fault("XR controller pose is unavailable")
+            self._latch_safety_fault("读不到 XR 手柄位姿")
             return
 
         if not was_active:
@@ -1411,7 +1976,7 @@ class RealmanRM65SafeTeleopController:
             return
         if not self._accept_xr_sample(xr_pose, now):
             if not self._rearm_required:
-                self._latch_safety_fault("XR controller pose jump exceeded the per-frame safety limit")
+                self._latch_safety_fault("XR 手柄位姿单帧跳变超过安全上限")
             return
 
         self._send_xr_target(now, grip, feedback, xr_pose)
@@ -1431,12 +1996,12 @@ class RealmanRM65SafeTeleopController:
         summary = self.timing_stats.summary()
         print(
             "[TIMING] "
-            f"period_p50={summary['period_p50_ms']:.2f}ms "
-            f"period_p95={summary['period_p95_ms']:.2f}ms "
-            f"period_max={summary['period_max_ms']:.2f}ms "
-            f"send_max={summary['send_max_ms']:.2f}ms "
-            f"udp_age_max={summary['udp_age_max_ms']:.2f}ms "
-            f"missed={summary['deadline_misses']}"
+            f"周期p50={summary['period_p50_ms']:.2f}ms "
+            f"周期p95={summary['period_p95_ms']:.2f}ms "
+            f"周期max={summary['period_max_ms']:.2f}ms "
+            f"发送max={summary['send_max_ms']:.2f}ms "
+            f"UDP反馈最大年龄={summary['udp_age_max_ms']:.2f}ms "
+            f"错过周期={summary['deadline_misses']}"
         )
 
     def run(self) -> None:
@@ -1446,12 +2011,38 @@ class RealmanRM65SafeTeleopController:
             if self.self_test_ramp and not self.dry_run:
                 confirmation = f"RUN {self.self_test_axis} {self.self_test_distance_m:.3f}m"
                 answer = input(
-                    "[SELF TEST] Verify controller-frame direction, clear workspace and guard E-stop. "
-                    f"No XR/Grip control and no automatic return. Type '{confirmation}': "
+                    "[自检] 请先确认控制器坐标系下的运动方向、工作空间已净空、急停就绪。"
+                    f"自检期间不接受 XR/Grip 控制，也不会自动回位。请输入 '{confirmation}'："
                 )
                 if answer.strip() != confirmation:
                     return
             self._startup()
+            if self.auto_home_on_start and self.home_joint_rad is not None:
+                feedback = self._checked_feedback(self._monotonic(), require_fresh=True, check_tracking=False)
+                if feedback is None:
+                    return
+                joint_error = float(np.max(np.abs(self.home_joint_rad - feedback.joint_rad)))
+                if joint_error > self.home_joint_tolerance_rad:
+                    if self.dry_run:
+                        print("[DRY RUN] 已配置固定六轴 Home；dry run 跳过启动回位")
+                    else:
+                        phrase = "HOME " + " ".join(format(value, ".10g") for value in np.rad2deg(self.home_joint_rad))
+                        answer = input(
+                            "[HOME] 请确认整条回程路径净空、急停就绪，且允许机械臂低速移动到 "
+                            f"{phrase[5:]}。请输入 '{phrase}'："
+                        )
+                        if answer.strip() != phrase:
+                            print("[HOME] 未收到确认口令；已取消启动回位")
+                            return
+                        feedback = self._checked_feedback(self._monotonic(), require_fresh=True, check_tracking=False)
+                        if feedback is None:
+                            return
+                        self._start_reset(feedback)
+                        if self.arm.fault_latched or not self._resetting:
+                            return
+                        self._startup_homing = True
+                else:
+                    print("[HOME] 实测关节已与固定六轴 Home 一致")
             while True:
                 now = self._monotonic()
                 self._last_send_duration_s = 0.0
@@ -1471,15 +2062,15 @@ class RealmanRM65SafeTeleopController:
                     self._print_timing_summary()
                     last_summary_t = now
                 if self.scheduler is None:
-                    raise RuntimeError("fixed-rate scheduler was not initialized")
+                    raise RuntimeError("定周期调度器未初始化")
                 next_deadline = self.scheduler.advance(self._monotonic())
                 delay = next_deadline - self._monotonic()
                 if delay > 0.0:
                     self._sleep(delay)
         except KeyboardInterrupt:
-            print("\n[INFO] teleoperation interrupted by user")
+            print("\n[INFO] 用户中断遥操作")
         except Exception as exc:
-            print(f"\n[ERROR] teleoperation stopped: {exc}")
+            print(f"\n[ERROR] 遥操作已停止：{exc}")
             try:
                 if not self.self_test_ramp or self._started:
                     self.arm.latch_fault(str(exc))
@@ -1509,3 +2100,7 @@ class RealmanRM65SafeTeleopController:
                 pass
             if self._motion_log is not None:
                 self._motion_log.close()
+
+
+class RealmanRM65SafeTeleopController(RM65ControlCore):
+    """Hardware entrypoint for the shared RM65 control core."""
