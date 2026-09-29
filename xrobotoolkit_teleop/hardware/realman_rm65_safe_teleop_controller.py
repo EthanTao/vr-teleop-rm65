@@ -610,6 +610,26 @@ class RM65ControlCore:
             return math.inf
         return max(0.0, now - feedback.received_monotonic_s)
 
+    def _record_measured_tcp(self) -> None:
+        """把 UDP 实测末端位姿写进诊断行（仅 `--motion-log-path` 生效时存在该行）。
+
+        为什么需要它：诊断行本来就记了「预期位姿 `target_xyz`」与「命令位姿 `command_xyz`」，
+        实测层却只有关节角 `joint_measured_rad`。真机验收一旦靠口述回忆（2026-09-29 那轮
+        就是这样），「手动了多少、臂实际动了多少」就没有可核对的原始记录。补上这一层之后，
+        每周期同时留下 **预期 / 命令 / 实测** 三层位姿，差值直接可算。
+
+        边界：UDP 实测 TCP 是**控制器自己上报**的位姿，与本地官方 FK 不是同一个来源；
+        仅落盘，不参与任何判据、限幅、锁存或停止逻辑。
+        """
+        row = self._diagnostic_row
+        if row is None:
+            return
+        feedback = self.feedback_receiver.latest()
+        if feedback is None:
+            return
+        row["measured_tcp_xyz_m"] = np.asarray(feedback.tcp_xyz_m).tolist()
+        row["measured_tcp_quat_wxyz"] = np.asarray(feedback.tcp_quat_wxyz).tolist()
+
     def _validate_feedback(
         self,
         feedback: ArmFeedback,
@@ -1079,9 +1099,7 @@ class RM65ControlCore:
                 max_fk_calls=self.dls.max_fk_calls,
                 enforce_budget=True,
             )
-            seed = (
-                feedback.joint_rad if self._dls_seed_joint_rad is None else self._dls_seed_joint_rad
-            ).copy()
+            seed = (feedback.joint_rad if self._dls_seed_joint_rad is None else self._dls_seed_joint_rad).copy()
             origin, orientation = self.dls.forward(seed)
             valid, reason = self.arm._pose_is_within_bounds(xyz)
             if not valid:
@@ -1711,6 +1729,8 @@ class RM65ControlCore:
             "send_result": None,
             "transport": None,
             "joint_measured_rad": None,
+            "measured_tcp_xyz_m": None,
+            "measured_tcp_quat_wxyz": None,
             "joint_prev_accepted_rad": None,
             "joint_seed_rad": None,
             "joint_candidate_rad": None,
@@ -1757,6 +1777,9 @@ class RM65ControlCore:
                 feedback_age_s=age if math.isfinite(age) else None,
                 fault_reason=getattr(self.arm, "fault_reason", None),
             )
+            # 实测末端位姿必须在本周期结束时取最新一帧，不能用周期中途那次；
+            # 该调用只在 `--motion-log-path` 生效时存在（`_diagnostic_row` 只在有日志时创建）。
+            self._record_measured_tcp()
             self._motion_log.record(row)
             self._diagnostic_row = None
 

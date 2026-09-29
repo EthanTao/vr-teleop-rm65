@@ -216,3 +216,30 @@ def test_self_test_cancellation_does_not_connect_or_stop(monkeypatch):
 def test_invalid_ramp_rejected_before_motion(kwargs):
     with pytest.raises(ValueError):
         _self_test(**kwargs)
+
+
+def test_motion_log_records_the_measured_tcp_pose_alongside_target_and_command(tmp_path, monkeypatch):
+    """每周期必须同时留下「预期 / 命令 / 实测」三层位姿。
+
+    只有 ``joint_measured_rad`` 而没有 ``measured_tcp_xyz_m`` 时，「手动了多少、臂实际
+    动了多少」就只能靠口述回忆 —— 2026-09-29 那次验收正是如此，事后无法核对。
+    这条测试把该字段锁死，防止以后被顺手删掉。
+    """
+    monkeypatch.setattr(controller_module, "apply_delta_pose", lambda xyz, quat, delta, rot: (xyz + delta, quat.copy()))
+    path = tmp_path / "cycles.jsonl"
+    clock = [1.0]
+    c, _, receiver = _controller(_feedback(), motion_log_path=str(path), monotonic_fn=lambda: clock[0])
+    c._last_singularity_warning_t = 1.0
+    c._run_cycle(1.0)
+    if c._motion_log:
+        c._motion_log.close()
+
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    cycles = [row for row in rows if row.get("type") == "cycle"]
+    assert cycles
+    for row in cycles:
+        assert "measured_tcp_xyz_m" in row, "诊断行必须声明实测末端字段（即使本周期没取到）"
+        assert "measured_tcp_quat_wxyz" in row
+    # _feedback() 的固定 TCP 位姿：写进去的必须是**实测**那一帧，不是命令或目标。
+    assert cycles[0]["measured_tcp_xyz_m"] == pytest.approx([0.3, 0.0, 0.5])
+    assert cycles[0]["measured_tcp_quat_wxyz"] == pytest.approx([1.0, 0.0, 0.0, 0.0])
