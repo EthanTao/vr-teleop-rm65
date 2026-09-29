@@ -75,6 +75,38 @@ def test_run_in_container_uses_safe_hardware_entrypoint():
     assert "--dry-run" not in command
 
 
+def test_run_in_container_forwards_home_joint_deg_for_hardware_when_given():
+    """真机模式此前完全忽略 `--home-joint-deg`，导致用一键启动器无法试候选 Home。"""
+    process = MagicMock()
+    process.returncode = 0
+    with (
+        patch.object(teleop.sys.stdin, "isatty", return_value=False),
+        patch.object(teleop.subprocess, "Popen", return_value=process) as popen,
+    ):
+        teleop.run_in_container("hardware", home_joint_deg=[0, -30, -90, 0, 90, 0])
+
+    command = popen.call_args.args[0][-1]
+    assert "--home-joint-deg 0 -30 -90 0 90 0" in command
+
+
+def test_run_in_container_omits_home_joint_deg_for_hardware_when_absent():
+    """不显式给就保持原命令形状（入口自带的默认值负责兜底）。"""
+    process = MagicMock()
+    process.returncode = 0
+    with (
+        patch.object(teleop.sys.stdin, "isatty", return_value=False),
+        patch.object(teleop.subprocess, "Popen", return_value=process) as popen,
+    ):
+        teleop.run_in_container("hardware")
+
+    assert "--home-joint-deg" not in popen.call_args.args[0][-1]
+
+
+def test_run_in_container_rejects_a_wrong_length_home_for_hardware():
+    with pytest.raises(ValueError):
+        teleop.run_in_container("hardware", home_joint_deg=[0, 0, -60])
+
+
 def test_run_in_container_supports_hardware_dry_run():
     process = MagicMock()
     process.returncode = 0

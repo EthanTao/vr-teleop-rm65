@@ -600,9 +600,20 @@ def run_in_container(
             raise ValueError("sim_ik_backend must be 'placo', 'official' or 'shared-dls'")
         joints = " ".join(format(value, ".10g") for value in home_joint_deg)
         script = f"{script} --home-joint-deg {joints} --ik-backend {sim_ik_backend}"
-    elif mode in {"hardware", "hardware-dry-run"} and enable_home_path_preflight:
-        # 真机入口默认关闭固定 Home 回位路径预检；这里只在显式要求时恢复拒绝式预检
-        script = f"{script} --enable-home-path-preflight"
+    elif mode in {"hardware", "hardware-dry-run"}:
+        # 真机模式此前完全忽略 --home-joint-deg，导致**用一键启动器无法试候选 Home**，
+        # 只能直连脚本。这里只在用户**显式给出**时透传（`run()` 只对 sim 做默认值解析，
+        # 所以真机模式下 None 就代表「没给」），不改动既有的默认命令形状。
+        flags = ""
+        if home_joint_deg is not None:
+            if len(home_joint_deg) != 6:
+                raise ValueError("--home-joint-deg 需要六个角度")
+            joints = " ".join(format(value, ".10g") for value in home_joint_deg)
+            flags += f" --home-joint-deg {joints}"
+        if enable_home_path_preflight:
+            # 真机入口默认关闭固定 Home 回位路径预检；这里只在显式要求时恢复拒绝式预检
+            flags += " --enable-home-path-preflight"
+        script = f"{script}{flags}"
 
     # 本地有 TTY 时 ssh 加 -t、docker 用 -it（Ctrl+C 能传进容器）；否则全用 -i
     has_tty = sys.stdin.isatty()
@@ -679,7 +690,8 @@ def parse_args() -> argparse.Namespace:
         nargs=6,
         type=float,
         metavar=("J1", "J2", "J3", "J4", "J5", "J6"),
-        help="仿真侧装安全 home joint，六个关节角度，单位为度",
+        help="固定六轴 home joint，六个关节角度，单位为度；sim 必填（默认 [0,0,-60,0,60,0]），"
+        "hardware / hardware-dry-run 可选（不给就用入口默认）",
     )
     parser.add_argument(
         "--sim-ik-backend",
