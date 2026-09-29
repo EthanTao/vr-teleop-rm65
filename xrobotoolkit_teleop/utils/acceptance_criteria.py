@@ -36,6 +36,9 @@
 from __future__ import annotations
 
 DEFAULT_CRITERIA: dict[str, float | int | bool] = {
+    # 证据必须完整：日志正常收尾、无丢行、无写入错误。放在第一条 ——
+    # 一份被截断的日志看起来与完整的一模一样，先确认证据可信再谈数字。
+    "require_complete_log": True,
     # 记录必须带实测末端位姿，否则「臂实际动了多少」无从计算
     "require_measured_tcp": True,
     # 整场最短时长与有效段
@@ -73,6 +76,19 @@ def evaluate(
         limits.update(criteria)
 
     checks: list[dict] = []
+
+    if limits["require_complete_log"]:
+        complete = bool(motion_report.get("log_complete"))
+        reasons: list[str] = []
+        if motion_report.get("log_end") is None:
+            reasons.append("没有 log_end 收尾行（进程未正常退出，日志可能被截断）")
+        if motion_report.get("log_dropped_rows"):
+            reasons.append(f"丢行 {motion_report['log_dropped_rows']} 行")
+        if motion_report.get("log_error"):
+            reasons.append(f"写入错误：{motion_report['log_error']}")
+        checks.append(
+            _check("日志证据完整", complete, complete, True, "；".join(reasons) or "正常收尾、无丢行、无写入错误")
+        )
 
     if limits["require_measured_tcp"]:
         has_tcp = bool(motion_report.get("has_measured_tcp"))

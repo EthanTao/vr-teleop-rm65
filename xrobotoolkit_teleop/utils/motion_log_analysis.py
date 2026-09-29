@@ -45,10 +45,17 @@ _FOLLOW_RATIO_FLOOR_M = 1e-4
 MEASURED_TCP_KEYS = ("measured_tcp_xyz_m", "measured_tcp_quat_wxyz")
 
 
-def load_cycles(path: str | Path) -> tuple[list[dict], list[str]]:
-    """读出所有 ``type == "cycle"`` 的行，并收集解析失败的行号（不抛异常）。"""
+def load_log(path: str | Path) -> tuple[list[dict], list[str], dict | None]:
+    """读出周期行、解析失败的行号，以及收尾的 ``log_end`` 行。
+
+    ``log_end`` 是 `MotionLog` **正常关闭时**才写的收尾行（`motion_diagnostics.py` 的
+    `_worker` 末尾）。它缺失就意味着进程没有干净退出 —— 被强杀、掉电、或收尾时抛了错，
+    这份日志**可能被截断**，不能当作完整证据。这正是「静默信任不完整证据」的那个陷阱：
+    只解析周期行的话，一份被砍掉一半的日志看起来完全正常。
+    """
     cycles: list[dict] = []
     errors: list[str] = []
+    log_end: dict | None = None
     with Path(path).open(encoding="utf-8") as handle:
         for number, raw in enumerate(handle, 1):
             raw = raw.strip()
@@ -59,8 +66,19 @@ def load_cycles(path: str | Path) -> tuple[list[dict], list[str]]:
             except json.JSONDecodeError as exc:
                 errors.append(f"第 {number} 行: {exc}")
                 continue
-            if isinstance(row, dict) and row.get("type") == "cycle":
+            if not isinstance(row, dict):
+                continue
+            kind = row.get("type")
+            if kind == "cycle":
                 cycles.append(row)
+            elif kind == "log_end":
+                log_end = row
+    return cycles, errors, log_end
+
+
+def load_cycles(path: str | Path) -> tuple[list[dict], list[str]]:
+    """只取周期行与解析错误（保留这个入口，兼容既有调用方）。"""
+    cycles, errors, _log_end = load_log(path)
     return cycles, errors
 
 
@@ -205,13 +223,20 @@ def segment_report(rows: list[dict], index: int) -> dict:
 
 def analyse(path: str | Path) -> dict:
     """整个日志的汇总：逐段判定表 + 「哪些周期最像『手在动、臂不动』」。"""
-    cycles, errors = load_cycles(path)
+    cycles, errors, log_end = load_log(path)
+    dropped = None if log_end is None else int(log_end.get("dropped_rows") or 0)
+    log_error = None if log_end is None else log_end.get("error")
     report: dict = {
         "path": str(path),
         "parse_errors": errors,
         "total_cycles": len(cycles),
         "has_measured_tcp": has_measured_tcp(cycles),
         "segments": [],
+        "log_end": log_end,
+        "log_dropped_rows": dropped,
+        "log_error": log_error,
+        # 证据完整性：必须正常收尾（有 log_end）、无丢行、无写入错误。
+        "log_complete": log_end is not None and not dropped and not log_error,
     }
     if not cycles:
         return report
@@ -281,6 +306,14 @@ def format_report(report: dict, *, top: int = 5) -> str:
     states = report.get("states")
     if states:
         lines.append(f"  状态: {', '.join(states)}   dry_run={report.get('dry_run')}")
+
+    # 证据完整性要**先说**：一份被截断的日志看起来跟完整的一模一样。
+    if report.get("log_end") is None:
+        lines.append("  ⚠️ 没有 log_end 收尾行：进程未正常退出，这份日志可能被截断，不能当作完整证据")
+    elif not report.get("log_complete"):
+        lines.append(
+            f"  ⚠️ 日志不完整：丢行 {report.get('log_dropped_rows')} 行，" f"写入错误 {report.get('log_error')}"
+        )
 
     if not report["has_measured_tcp"]:
         lines.append("")

@@ -209,3 +209,76 @@ def test_main_prints_the_follow_ratio_table(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "跟随比" in out
     assert "0.10" in out
+
+
+def test_log_end_marks_the_log_complete(tmp_path):
+    """有 `log_end` 且无丢行/错误 → 证据完整。"""
+    path = _write(
+        tmp_path,
+        [_row(0, target=[0.0, 0.0, 0.0], command=[0.0, 0.0, 0.0], measured=[0.0, 0.0, 0.0])],
+        extra=[{"type": "log_end", "dropped_rows": 0, "error": None}],
+    )
+
+    report = ml.analyse(path)
+
+    assert report["log_complete"] is True
+    assert report["log_dropped_rows"] == 0
+    assert report["log_error"] is None
+
+
+def test_missing_log_end_marks_the_log_incomplete(tmp_path):
+    """被强杀 / 掉电的日志没有收尾行 —— 它看起来与完整的完全一样，必须点出来。"""
+    path = _write(tmp_path, [_row(0, target=[0.0, 0.0, 0.0], command=[0.0, 0.0, 0.0], measured=[0.0, 0.0, 0.0])])
+
+    report = ml.analyse(path)
+
+    assert report["log_complete"] is False
+    assert report["log_end"] is None
+    assert "可能被截断" in ml.format_report(report)
+
+
+def test_log_end_with_dropped_rows_marks_the_log_incomplete(tmp_path):
+    path = _write(
+        tmp_path,
+        [_row(0, target=[0.0, 0.0, 0.0], command=[0.0, 0.0, 0.0], measured=[0.0, 0.0, 0.0])],
+        extra=[{"type": "log_end", "dropped_rows": 5, "error": None}],
+    )
+
+    report = ml.analyse(path)
+
+    assert report["log_complete"] is False
+    assert report["log_dropped_rows"] == 5
+    assert "日志不完整" in ml.format_report(report)
+
+
+def test_log_end_with_a_write_error_marks_the_log_incomplete(tmp_path):
+    path = _write(
+        tmp_path,
+        [_row(0, target=[0.0, 0.0, 0.0], command=[0.0, 0.0, 0.0], measured=[0.0, 0.0, 0.0])],
+        extra=[{"type": "log_end", "dropped_rows": 0, "error": "injected"}],
+    )
+
+    report = ml.analyse(path)
+
+    assert report["log_complete"] is False
+    assert report["log_error"] == "injected"
+
+
+def test_load_log_returns_cycles_errors_and_the_log_end_row(tmp_path):
+    path = tmp_path / "m.jsonl"
+    path.write_text(
+        json.dumps({"type": "cycle", "cycle_index": 1})
+        + "\n"
+        + "{not json}\n"
+        + json.dumps({"type": "log_end", "dropped_rows": 0, "error": None})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    cycles, errors, log_end = ml.load_log(path)
+
+    assert len(cycles) == 1
+    assert len(errors) == 1
+    assert log_end == {"type": "log_end", "dropped_rows": 0, "error": None}
+    # 兼容入口仍然只返回前两项
+    assert ml.load_cycles(path) == (cycles, errors)

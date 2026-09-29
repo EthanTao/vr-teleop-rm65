@@ -23,13 +23,20 @@ def _motion_report(
     fault_episodes: int = 0,
     has_measured_tcp: bool = True,
     total_cycles: int = 6000,
+    log_complete: bool = True,
 ) -> dict:
     return {
         "has_measured_tcp": has_measured_tcp,
         "duration_s": duration_s,
         "fault_episodes": fault_episodes,
         "total_cycles": total_cycles,
-        "segments": segments if segments is not None else [_segment(100, 0.95), _segment(120, 0.9), _segment(80, 0.85)],
+        "log_complete": log_complete,
+        "log_end": {"type": "log_end", "dropped_rows": 0, "error": None} if log_complete else None,
+        "log_dropped_rows": 0,
+        "log_error": None,
+        "segments": (
+            segments if segments is not None else [_segment(100, 0.95), _segment(120, 0.9), _segment(80, 0.85)]
+        ),
     }
 
 
@@ -216,6 +223,8 @@ def _clean_synthetic_rows(segments: int = 3, cycles_per_segment: int = 1200) -> 
             )
             index += 1
             stamp += 0.02
+    # 正常收尾行：`MotionLog` 干净关闭时才写；缺失即代表日志可能被截断。
+    rows.append({"type": "log_end", "dropped_rows": 0, "error": None})
     return rows
 
 
@@ -234,3 +243,60 @@ def test_no_mapping_flag_also_relaxes_the_mapping_criterion(tmp_path):
 
     assert ac.main([str(path)]) == 2  # 不关判据 → 判不过
     assert ac.main([str(path), "--no-mapping"]) == 0  # 关掉 → 过得去
+
+
+def test_missing_log_end_fails_the_evidence_check():
+    """被强杀 / 掉电的日志没有 log_end，看起来却和完整的一模一样 —— 必须判不过。"""
+    motion = _motion_report()
+    motion["log_complete"] = False
+    motion["log_end"] = None
+
+    verdict = ac.evaluate(motion, _mapping_report())
+
+    assert verdict["passed"] is False
+    check = _by_name(verdict)["日志证据完整"]
+    assert check["passed"] is False
+    assert "log_end" in check["note"]
+
+
+def test_dropped_rows_fail_the_evidence_check():
+    motion = _motion_report()
+    motion["log_complete"] = False
+    motion["log_dropped_rows"] = 12
+    motion["log_end"] = {"type": "log_end", "dropped_rows": 12, "error": None}
+
+    verdict = ac.evaluate(motion, _mapping_report())
+
+    assert verdict["passed"] is False
+    assert "丢行 12 行" in _by_name(verdict)["日志证据完整"]["note"]
+
+
+def test_log_write_error_fails_the_evidence_check():
+    motion = _motion_report()
+    motion["log_complete"] = False
+    motion["log_error"] = "injected write failure"
+    motion["log_end"] = {"type": "log_end", "dropped_rows": 0, "error": "injected write failure"}
+
+    verdict = ac.evaluate(motion, _mapping_report())
+
+    assert verdict["passed"] is False
+    assert "injected write failure" in _by_name(verdict)["日志证据完整"]["note"]
+
+
+def test_evidence_check_can_be_turned_off_for_a_truncated_but_useful_log():
+    """被截断的日志仍可能有诊断价值；显式关掉该判据时不应拦住分析。"""
+    motion = _motion_report()
+    motion["log_complete"] = False
+    motion["log_end"] = None
+
+    verdict = ac.evaluate(motion, _mapping_report(), {"require_complete_log": False})
+
+    assert verdict["passed"] is True
+    assert "日志证据完整" not in _by_name(verdict)
+
+
+def test_main_fails_on_a_log_that_was_never_closed(tmp_path):
+    path = tmp_path / "truncated.jsonl"
+    path.write_text("\n".join(json.dumps(row) for row in _clean_synthetic_rows()[:-1]) + "\n", encoding="utf-8")
+
+    assert ac.main([str(path), "--no-mapping"]) == 2
