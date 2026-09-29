@@ -114,11 +114,19 @@ def _fake_remote_manifest(monkeypatch, teleop_module, manifest):
 
 
 def test_sync_code_skips_upload_when_remote_is_current(monkeypatch):
-    """远端清单与本地一致时，不应产生任何上传命令。"""
+    """远端清单与本地一致时，不应产生任何上传命令。
+
+    这里必须打桩 `_save_manifest`：本用例把扫描结果与远端清单都设成空，而 `sync_code`
+    在这个分支会真的去写本地缓存（内容就是 `{"files": {}, "signatures": {}}`）。
+    不打桩时它会写进 `LOCAL_CACHE`，在正常环境里就是用户真实的 `%TEMP%` —— 既污染环境，
+    又会覆盖掉上一次真实同步留下的痕迹（2026-09-29 的诊断曾被这份残留带偏，见
+    `tests/conftest.py` 与 `docs/2026.9.29.md`）。
+    """
     uploaded = []
     monkeypatch.setattr(teleop, "TAR_PATH", "tar")
     monkeypatch.setattr(teleop, "SSH_PATH", "ssh")
     monkeypatch.setattr(teleop, "_load_manifest", lambda: {"files": {}, "signatures": {}})
+    monkeypatch.setattr(teleop, "_save_manifest", lambda manifest: None)
     monkeypatch.setattr(teleop, "_iter_source_files", lambda: [])
     monkeypatch.setattr(teleop, "_upload_changed_files", lambda paths: uploaded.append(paths) or True)
     _fake_remote_manifest(monkeypatch, teleop, {"version": 1, "files": {}})
@@ -250,6 +258,30 @@ def test_every_launch_mode_syncs_code(monkeypatch):
         teleop.run("hardware-dry-run")
 
     assert order == ["sync", "tunnel", "run"]
+
+
+def test_launcher_and_container_entry_print_the_same_fingerprint():
+    """两端必须打印同一个标签与同一个值，否则对照没有意义。"""
+    from xrobotoolkit_teleop.utils.code_fingerprint import fingerprint_line
+
+    assert teleop._local_fingerprint_line() == fingerprint_line(teleop.LOCAL_PATH)
+
+
+def test_run_prints_the_local_fingerprint_after_sync(monkeypatch, capsys):
+    """同步成功后必须打印本机指纹，供与容器启动时的同一行对照。"""
+    monkeypatch.setattr(teleop, "sync_code", lambda: True)
+    monkeypatch.setattr(teleop, "start_tunnel", lambda mode: None)
+    monkeypatch.setattr(teleop, "cleanup", lambda: None)
+    monkeypatch.setattr(
+        teleop,
+        "run_in_container",
+        lambda mode, home_joint_deg=None, sim_ik_backend="placo", enable_home_path_preflight=False: 0,
+    )
+
+    with pytest.raises(SystemExit):
+        teleop.run("hardware-dry-run")
+
+    assert teleop._local_fingerprint_line() in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("failure", ["upload", "manifest"])

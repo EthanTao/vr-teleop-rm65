@@ -5,6 +5,7 @@ import tyro
 from xrobotoolkit_teleop.hardware.realman_rm65_safe_teleop_controller import (
     RealmanRM65SafeTeleopController,
 )
+from xrobotoolkit_teleop.utils.code_fingerprint import fingerprint_line
 
 
 def main(
@@ -135,6 +136,11 @@ def main(
     allowance is the separate budget described above and is not folded into that limit, so
     the Cartesian velocity cap and the governor are what actually bound a fast command.
     """
+    # 打印容器内的控制链源码指纹。本机（teleop.py 同步后）会打印同一行，
+    # 两行不一致就说明容器里跑的不是本机这份代码 —— 这是唯一能区分
+    # 「改动没生效」与「改动生效了但问题还在」的证据，不参与任何安全判据。
+    print(fingerprint_line())
+
     fixed_home_enabled = not self_test_ramp and motion_command == "damped_ik_movej_follow"
     if not self_test_ramp and not fixed_home_enabled:
         print("[HOME] fixed joint home is available only in DLS mode; legacy mode keeps startup TCP reset")

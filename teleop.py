@@ -506,6 +506,23 @@ def sync_code() -> bool:
     return True
 
 
+def _local_fingerprint_line() -> str:
+    """本机控制链源码指纹，供与容器启动时打印的同一行对照。
+
+    为什么需要它：`sync_code()` 返回 True 只说明「按清单看已经一致」，它无法证明
+    远端**实际**跑的就是这份代码（2026-09-29 诊断时就没有任何手段能回答这个问题）。
+    两端打印同一个标签与同一个哈希，不一致就直接暴露。
+
+    指纹只做诊断：不进同步判据，不进任何安全判据；取不到就打印一行显眼的不可用说明，
+    绝不拦住启动。
+    """
+    try:
+        from xrobotoolkit_teleop.utils.code_fingerprint import fingerprint_line
+    except Exception as exc:  # 诊断功能不得拦住启动，但失败必须显眼
+        return f"[FINGERPRINT] 不可用（{type(exc).__name__}: {exc}）— 无法核对容器里是哪一版"
+    return fingerprint_line(LOCAL_PATH)
+
+
 # ===== SSH 隧道 =====
 def start_tunnel(mode: Mode) -> subprocess.Popen | None:
     """后台建立该模式需要的隧道；建不起来就返回 None 并继续执行。"""
@@ -706,6 +723,9 @@ def run(
     if not sync_code():
         print("\n[FAIL] 代码同步失败，已中止启动")
         sys.exit(1)
+
+    # 本机指纹在这里打印；容器里的真机入口启动时会打印同一行，两行必须一致。
+    print(_local_fingerprint_line())
 
     mode = show_menu() if mode_str == "menu" else mode_str
     if mode is None:
