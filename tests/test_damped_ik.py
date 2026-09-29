@@ -431,6 +431,13 @@ def test_reduced_speed_does_not_reduce_braking_acceleration():
 
 @pytest.mark.parametrize("danger", [False, True])
 def test_b_return_uses_dls_guard(monkeypatch, danger):
+    """B 回位与遥操作共用同一个发送门槛；门槛本身在 2026-09-26 变成方向级。
+
+    ``danger`` 把 |J5| 放到 `0.1°`：那正是腕部奇异。旧门槛（配置级 ratio 硬停）会冻结
+    **每一个**方向，所以回位命令被拒；新门槛只拒「按这个方向走不了」的命令，而回位这一段
+    是纯 TCP 平移（WristFK 里平移只由 J1–J3 产生），方向本身完全可行，因此必须放行。
+    真正被拒的情形由 `test_unwalkable_return_direction_is_refused_without_faulting` 覆盖。
+    """
     from xrobotoolkit_teleop.utils import geometry
     from xrobotoolkit_teleop.hardware.cartesian_command_limiter import _quaternion_conjugate
 
@@ -446,22 +453,44 @@ def test_b_return_uses_dls_guard(monkeypatch, danger):
     c._reset_step = c._reset_steps_total // 2
     c._tick_reset(1.0, rx.feedback)
     assert not arm.fault_latched
-    assert len(arm.movej_follow_commands) == (0 if danger else 1)
-    assert c._singularity_hold == danger
+    assert len(arm.movej_follow_commands) == 1
+    assert not c._singularity_hold
     assert arm.movep_follow_commands == []
 
 
-@pytest.mark.parametrize("danger", [False, True])
-def test_self_test_uses_dls_guard(danger):
-    q = Q.copy()
-    if danger:
-        q[4] = np.deg2rad(0.1)
-    c, arm, rx = make_dls(q, self_test_ramp=True)
+def test_unwalkable_return_direction_is_refused_without_faulting(monkeypatch):
+    """方向不可行时回位仍被拒（HOLD，不锁存），门槛对回位与遥操作一视同仁。"""
+    from xrobotoolkit_teleop.utils import geometry
+    from xrobotoolkit_teleop.hardware.cartesian_command_limiter import _quaternion_conjugate
+
+    monkeypatch.setattr(geometry.tf, "quaternion_inverse", _quaternion_conjugate, raising=False)
+    monkeypatch.setattr(geometry.tf, "quaternion_multiply", _quaternion_multiply, raising=False)
+    # RankOneFK 的可达方向是 +x；把 Home 放到 +y 上，这一段回位方向就不可行。
+    c, arm, rx = make_dls(Q, dls_kinematics=RankOneFK())
+    c.home_xyz = rx.feedback.tcp_xyz_m + np.array([0.0, 0.01, 0.0])
+    c.home_quat = rx.feedback.tcp_quat_wxyz.copy()
+    c._start_reset(rx.feedback)
+    c._reset_step = c._reset_steps_total // 2
+    c._tick_reset(1.0, rx.feedback)
+    assert not arm.fault_latched
+    assert arm.movej_follow_commands == []
+    assert c._singularity_hold
+
+
+@pytest.mark.parametrize("axis,expected", [("+x", 1), ("-y", 0)])
+def test_self_test_uses_dls_guard(axis, expected):
+    """自检同样走方向级门槛：+x 可行；-y 在 RankOneFK 下不可行，保持且不锁存。"""
+    c, arm, rx = make_dls(
+        Q,
+        dls_kinematics=RankOneFK(),
+        self_test_ramp=True,
+        self_test_axis=axis,
+    )
     c._tick_self_test(1.0)
     c._tick_self_test(1.1)
     assert not arm.fault_latched
-    assert len(arm.movej_follow_commands) == (0 if danger else 1)
-    assert c._singularity_hold == danger
+    assert len(arm.movej_follow_commands) == expected
+    assert c._singularity_hold == (expected == 0)
     assert arm.movep_follow_commands == []
 
 
@@ -539,6 +568,276 @@ def test_outward_motion_from_negative_wrist_side_does_not_cross_zero():
     assert solver.step(*solver.forward(inward), q, 0.02, SPEEDS).hold
     result = solver.step(*solver.forward(outward), q, 0.02, SPEEDS)
     assert not result.hold and result.joint_rad[4] < q[4]
+
+
+def _previous_path_verdict(solver, q, target, ratio):
+    """``bounded_path_allowed`` exactly as it stood before 2026-09-26.
+
+    Kept in the test file on purpose: the new guard is one-sided, and the differential check
+    below proves it never refuses a step the previous revision allowed.
+    """
+    stop_joint_rad = solver.stop_joint_rad
+    q3, q5 = float(q[2]), float(q[4])
+    if q3 * float(target[2]) < 0.0 or q5 * float(target[4]) < 0.0:
+        return False
+    angles = np.abs(q[[2, 4]])
+    next_angles = np.abs(np.asarray(target, dtype=float)[[2, 4]])
+    hard = angles <= stop_joint_rad
+    if ratio <= solver.stop_ratio and not np.any(hard):
+        return False
+    if np.any(hard):
+        if np.any(next_angles[hard] < angles[hard] - 1e-10):
+            return False
+        if not np.any(next_angles[hard] > angles[hard] + 1e-10):
+            return False
+    elif np.any(next_angles < stop_joint_rad):
+        return False
+    return True
+
+
+def test_path_guard_never_refuses_what_the_previous_revision_allowed():
+    """差分检查：新守卫是旧守卫的单侧放宽，旧版放行的样本新版必须全部放行。
+
+    「旧拒新放」的样本数必须大于零（否则这条改动没有生效），且必须恰好来自两处有意的
+    放宽：硬区内的切向运动、以及配置级 ratio 硬停区里仍然可行的方向。
+    """
+    solver = DampedIK(WristFK())
+    relaxed = 0
+    for j3_deg in (60.0, 20.0, 5.5, 5.0, 4.9, 3.0, 0.5):
+        for j5_deg in (60.0, 20.0, 5.5, 5.0, 4.9, 3.0, 0.5):
+            q = Q.copy()
+            q[2] = np.deg2rad(j3_deg)
+            q[4] = np.deg2rad(j5_deg)
+            ratio = solver.metrics(q)[0]
+            angles = np.abs(q[[2, 4]])
+            for index in range(6):
+                for sign in (1.0, -1.0):
+                    target = q.copy()
+                    target[index] += sign * np.deg2rad(0.5)
+                    old = _previous_path_verdict(solver, q, target, ratio)
+                    new = solver.bounded_path_allowed(q, target, angles=angles)
+                    assert not (old and not new), (j3_deg, j5_deg, index, sign)
+                    relaxed += int(new and not old)
+
+    # 配置级 ratio 已经进硬停线、但 J3/J5 都不在 5° 硬区：旧版冻结所有方向。
+    rank_one = DampedIK(RankOneFK())
+    q = Q.copy()
+    ratio = rank_one.metrics(q)[0]
+    assert ratio <= rank_one.stop_ratio and not np.any(np.abs(q[[2, 4]]) <= rank_one.stop_joint_rad)
+    target = q.copy()
+    target[0] += np.deg2rad(0.5)
+    assert not _previous_path_verdict(rank_one, q, target, ratio)
+    assert rank_one.bounded_path_allowed(q, target, angles=np.abs(q[[2, 4]]))
+    relaxed += 1
+
+    assert relaxed > 0, "the deliberate relaxations must admit steps the previous revision refused"
+
+
+def test_hard_zone_guard_is_one_sided():
+    """硬区内只禁止「更深」：切向与向外放行，向内（更接近奇异）拒绝。"""
+    solver = DampedIK(WristFK())
+    q = Q.copy()
+    q[4] = np.deg2rad(3.0)
+    angles = np.abs(q[[2, 4]])
+    tangential = q.copy()
+    tangential[0] += np.deg2rad(1.0)
+    deeper = q.copy()
+    deeper[4] -= np.deg2rad(0.5)
+    escape = q.copy()
+    escape[4] += np.deg2rad(0.5)
+    assert solver.bounded_path_allowed(q, tangential, angles=angles)
+    assert solver.bounded_path_allowed(q, escape, angles=angles)
+    assert not solver.bounded_path_allowed(q, deeper, angles=angles)
+    # 从硬区外进入硬区仍然拒绝：这才是不让位形继续深入。
+    outside = Q.copy()
+    outside[4] = np.deg2rad(6.0)
+    entering = outside.copy()
+    entering[4] -= np.deg2rad(2.0)
+    assert not solver.bounded_path_allowed(outside, entering, angles=np.abs(outside[[2, 4]]))
+    # 穿零位一律拒绝（唯一与方向无关的硬规则）。
+    crossing = Q.copy()
+    crossing[4] = np.deg2rad(-1.0)
+    assert not solver.bounded_path_allowed(Q, crossing, angles=np.abs(Q[[2, 4]]))
+
+
+def test_step_preserves_the_commanded_direction_instead_of_rotating_it():
+    """步长只许被缩短，不许被改写方向。
+
+    在同一雅可比上重放被删掉的阻尼权重 ``sigma/(sigma^2+lambda^2)``：它把可达的末端运动拧到
+    别处；现行的最小范数步与「指令方向在可达子空间上的正交投影」严格同向。
+    """
+    solver = DampedIK(WristFK(), min_speed_scale=1.0, escape_speed_scale=1.0)
+    q = Q.copy()
+    q[2] = np.deg2rad(45.0)
+    q[4] = np.deg2rad(5.5)  # 刚出 5° 硬区：严重度 ≈ 0.95，λ ≈ 0.076（现场手感区）
+    origin, orientation = solver.forward(q)
+    jac = solver.jacobian(q)
+    u, s, vt = np.linalg.svd(jac, full_matrices=False)
+    # 请求方向 = 最难走的方向与最好走的方向各一半（内部归一化度量下）。
+    requested = 0.5 * u[:, -1] + 0.5 * u[:, 0]
+    requested = requested / np.linalg.norm(requested)
+    step_size = 0.002
+    target_xyz = origin + requested[:3] * solver.length * step_size
+    target_quat = _quaternion_multiply(_angle_axis_quaternion(requested[3:] * step_size), orientation)
+    # 只测方向：关掉速度下限与加速度爬坡，让步长只受每关节预算约束（量化误差 ≤0.3%）。
+    step = solver.step(
+        target_xyz,
+        target_quat,
+        q,
+        0.02,
+        SPEEDS,
+        max_joint_acceleration=100.0,
+    )
+    assert not step.hold
+
+    # 用求解器自己的度量复算「实际请求方向」，不依赖上式的小角度近似。
+    request = np.concatenate(
+        (
+            (target_xyz - origin) / solver.length,
+            shortest_world_rotation_vector(orientation, target_quat),
+        )
+    )
+    projection = u @ (u.T @ request)
+    achieved = np.concatenate(
+        (
+            (step.xyz - origin) / solver.length,
+            shortest_world_rotation_vector(orientation, step.quat),
+        )
+    )
+
+    def angle_deg(left, right):
+        cosine = left @ right / (np.linalg.norm(left) * np.linalg.norm(right))
+        return float(np.rad2deg(np.arccos(np.clip(cosine, -1.0, 1.0))))
+
+    assert angle_deg(achieved, projection) < 2.0
+    damping = max(0.001, solver.max_damping * solver.severity(s[-1] / s[0], np.abs(q[[2, 4]])))
+    old_achieved = jac @ (vt.T @ ((s / (s * s + damping * damping)) * (u.T @ request)))
+    assert angle_deg(old_achieved, projection) > 5.0
+
+
+def test_the_first_step_of_a_segment_keeps_the_commanded_direction():
+    """段首（上一速度为零）的加速度限幅也必须是公共系数。
+
+    按关节各自截断时，想要快走的关节先被削平，第一步的末端运动可以被整个转向：候选以
+    「可达误差反而变大」被拒 → 命令流被清除 → 同一拒绝逐周期重复，机械臂在那个方向上
+    永远不动（现场「前后不动」的可复现机制之一）。
+    """
+    solver = DampedIK(WristFK(), min_speed_scale=1.0, escape_speed_scale=1.0)
+    q = Q.copy()
+    q[2] = np.deg2rad(45.0)
+    q[4] = np.deg2rad(5.5)
+    origin, orientation = solver.forward(q)
+    jac = solver.jacobian(q)
+    u, s, vt = np.linalg.svd(jac, full_matrices=False)
+    requested = 0.5 * u[:, -1] + 0.5 * u[:, 0]
+    requested = requested / np.linalg.norm(requested)
+    target_xyz = origin + requested[:3] * solver.length * 0.002
+    target_quat = _quaternion_multiply(_angle_axis_quaternion(requested[3:] * 0.002), orientation)
+    # previous_velocity 缺省即「上一速度为零」的段首。加速度上限放大到 5 rad/s²，让段首步长
+    # 远大于 0.001° 下发分辨率，测出来的角度才不是量化噪声。
+    acceleration = 5.0
+    step = solver.step(target_xyz, target_quat, q, 0.02, SPEEDS, max_joint_acceleration=acceleration)
+    assert not step.hold
+
+    request = np.concatenate(
+        (
+            (target_xyz - origin) / solver.length,
+            shortest_world_rotation_vector(orientation, target_quat),
+        )
+    )
+    projection = u @ (u.T @ request)
+    achieved = np.concatenate(
+        (
+            (step.xyz - origin) / solver.length,
+            shortest_world_rotation_vector(orientation, step.quat),
+        )
+    )
+
+    def angle_deg(left, right):
+        cosine = left @ right / (np.linalg.norm(left) * np.linalg.norm(right))
+        return float(np.rad2deg(np.arccos(np.clip(cosine, -1.0, 1.0))))
+
+    assert angle_deg(achieved, projection) < 2.0
+    assert float(achieved @ projection) > 0.0
+
+    # The removed per-joint acceleration clip, replayed on the same request.
+    error = request.copy()
+    error *= min(
+        1.0,
+        0.05 * 0.02 / max(np.linalg.norm(error[:3]), 1e-15),
+        0.25 * 0.02 / max(np.linalg.norm(error[3:]), 1e-15),
+    )
+    error[:3] /= solver.length
+    raw = vt.T @ ((1.0 / np.maximum(s, s[0] * 1e-9)) * (u.T @ error))
+    allowed_velocity = acceleration * 0.02
+    old_velocity = np.clip(raw / 0.02, -allowed_velocity, allowed_velocity)
+    old_achieved = jac @ (old_velocity * 0.02)
+    assert angle_deg(old_achieved, projection) > 10.0
+
+
+def test_rank_deficient_config_walks_the_reachable_direction_and_holds_the_others():
+    """不能按原方向走就停；能走的方向必须照走（旧版连唯一能走的方向也一起冻结）。"""
+    solver = DampedIK(RankOneFK())
+    q = Q.copy()
+    origin, quat = solver.forward(q)
+    reachable = solver.step(origin + np.array([0.004, 0.0, 0.0]), quat, q, 0.02, SPEEDS)
+    assert not reachable.hold and reachable.direction_ratio > 0.99
+    assert np.any(np.abs(reachable.joint_rad - q) > 1e-9)
+    assert np.all(np.abs(reachable.joint_rad - q) <= SPEEDS * 0.02 + 1e-9)
+
+    blocked = solver.step(origin + np.array([0.0, 0.004, 0.0]), quat, q, 0.02, SPEEDS)
+    assert blocked.hold and blocked.direction_blocked
+    assert "手柄方向不可行" in blocked.detail
+    np.testing.assert_allclose(blocked.joint_rad, q)
+
+
+class BoundaryFK:
+    """边界（全伸）奇异的玩具模型：x 只通过 ``|J3|`` 的二次项产生。
+
+    在 ``J3 ≈ 0`` 处沿臂轴的第一阶运动不可达（这就是硬停线要拦的方向），而增大 ``|J3|``
+    是收臂——退出方向。用来验证「退出优先」：方向增益已判为不可行时，向外步仍要放行。
+    """
+
+    def forward(self, q):
+        return (
+            np.array([0.5 - 0.1 * float(q[2]) ** 2, 0.1 * float(q[0]), 0.1 * float(q[1])]),
+            np.array([1.0, 0.0, 0.0, 0.0]),
+        )
+
+
+def test_escape_is_admitted_even_when_the_direction_gain_is_inside_the_stop_line():
+    """离开奇异优先：方向的等效增益已被判为不可行时，结构性向外步仍然放行。"""
+    solver = DampedIK(BoundaryFK())
+    q = Q.copy()
+    q[2] = np.deg2rad(0.2)  # |J3| 在 5° 硬区内，臂几乎全伸
+    origin, quat = solver.forward(q)
+    solver.begin_cycle()
+    assert solver.metrics(q)[0] <= solver.stop_ratio, "该位形必须已在硬停线以内"
+
+    deeper = solver.step(origin + np.array([0.002, 0.0, 0.0]), quat, q, 0.02, SPEEDS)
+    assert deeper.hold and deeper.direction_blocked
+    np.testing.assert_allclose(deeper.joint_rad, q)
+
+    escape = solver.step(origin + np.array([-0.002, 0.0, 0.0]), quat, q, 0.02, SPEEDS)
+    assert escape.direction_blocked, "向外与向内的一阶增益相同，只有退出规则能区分它们"
+    assert not escape.hold and escape.status == "escaping"
+    assert abs(escape.joint_rad[2]) > abs(q[2])
+    assert np.all(np.abs(escape.joint_rad - q) <= SPEEDS * 0.02 + 1e-9)
+
+
+def test_a_direction_blocked_hold_is_reported_and_sends_nothing():
+    """方向不可行 = 保持（软停、不锁存、不下发），并且诊断里必须说清是方向问题。"""
+    c, arm, rx = make_dls(Q, dls_kinematics=RankOneFK(), dry_run=False, log_motion_debug=True)
+    target = rx.feedback.tcp_xyz_m + np.array([0.0, 0.004, 0.0])
+    # 保持不算故障：这一周期只是没有命令下发。
+    assert c._send_motion(target, rx.feedback.tcp_quat_wxyz, rx.feedback.joint_rad)
+    assert not arm.fault_latched
+    assert arm.movej_follow_commands == []
+    assert c._last_accepted_joint_rad is None
+    assert c._singularity_hold
+    assert c._dls_debug["direction_blocked"] is True
+    assert c._dls_debug["direction_ratio"] < 1e-6
+    assert "手柄方向不可行" in c._dls_debug["detail"]
 
 
 @pytest.mark.parametrize("explicit_tool", [False, True])
@@ -733,11 +1032,131 @@ def test_fixed_joint_reset_uses_joint_waypoint_and_waits_for_joint_feedback(monk
     assert controller._rearm_required
 
 
-def test_auto_home_requires_exact_operator_confirmation(monkeypatch):
+def test_auto_home_starts_without_operator_confirmation(monkeypatch):
+    """Default startup auto-home must not wait for a typed phrase."""
     controller, arm, receiver = make_dls(
         Q,
         home_joint_deg=(0, 0, -60, 0, 60, 0),
         auto_home_on_start=True,
+    )
+    controller._startup = lambda: None
+    controller._checked_feedback = lambda *args, **kwargs: receiver.feedback
+    controller.home_start_delay_s = 0.0
+    started = []
+    prompts = []
+
+    def start(feedback):
+        started.append(feedback)
+        controller._resetting = True
+
+    controller._start_reset = start
+    controller._run_cycle = lambda now: (_ for _ in ()).throw(KeyboardInterrupt())
+    # Any read of stdin would return a phrase the old gate rejects, so a silent default is
+    # proven by the reset still starting with this stub installed.
+    monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or "no")
+    controller.run()
+    assert prompts == []
+    assert started == [receiver.feedback]
+    assert controller._startup_homing
+    assert not arm.fault_latched
+
+
+def test_auto_home_grace_window_waits_before_the_trip():
+    controller, arm, receiver = make_dls(
+        Q,
+        home_joint_deg=(0, 0, -60, 0, 60, 0),
+        auto_home_on_start=True,
+    )
+    controller._startup = lambda: None
+    controller.home_start_delay_s = 2.5
+    events = []
+    feedback_reads = []
+
+    def feedback_once(*args, **kwargs):
+        # The trip must be planned from feedback read *after* the window, not from the packet
+        # the deviation check used before it: the arm may not still be where it was.
+        feedback_reads.append(len(events))
+        return receiver.feedback
+
+    controller._checked_feedback = feedback_once
+    controller._sleep = lambda seconds: events.append(("sleep", seconds))
+
+    def start(feedback):
+        events.append(("reset", feedback))
+        controller._resetting = True
+
+    controller._start_reset = start
+    controller._run_cycle = lambda now: (_ for _ in ()).throw(KeyboardInterrupt())
+    controller.run()
+    assert events == [
+        ("sleep", 1.0),
+        ("sleep", 1.0),
+        ("sleep", 0.5),
+        ("reset", receiver.feedback),
+    ]
+    assert feedback_reads == [0, 3]
+    assert controller._startup_homing
+
+
+def test_auto_home_countdown_labels_count_down(capsys):
+    """Fractional windows must still read 3-2-1: no repeated label and no '0s' start."""
+    controller, arm, receiver = make_dls(
+        Q,
+        home_joint_deg=(0, 0, -60, 0, 60, 0),
+        auto_home_on_start=True,
+    )
+    controller._startup = lambda: None
+    controller._checked_feedback = lambda *args, **kwargs: receiver.feedback
+    controller.home_start_delay_s = 2.5
+    controller._sleep = lambda seconds: None
+    controller._start_reset = lambda feedback: setattr(controller, "_resetting", True)
+    controller._run_cycle = lambda now: (_ for _ in ()).throw(KeyboardInterrupt())
+    controller.run()
+    labels = [
+        line.removeprefix("[HOME] ").split("s 后")[0]
+        for line in capsys.readouterr().out.splitlines()
+        if "后开始启动回位" in line
+    ]
+    assert labels == ["3", "2", "1"]
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("nan"), -1.0])
+def test_home_start_delay_must_be_finite_and_non_negative(value):
+    with pytest.raises(ValueError):
+        make_dls(Q, home_joint_deg=(0, 0, -60, 0, 60, 0), home_start_delay_s=value)
+
+
+def test_auto_home_ctrl_c_during_the_grace_window_cancels_the_trip():
+    controller, arm, receiver = make_dls(
+        Q,
+        home_joint_deg=(0, 0, -60, 0, 60, 0),
+        auto_home_on_start=True,
+    )
+    controller._startup = lambda: None
+    controller._checked_feedback = lambda *args, **kwargs: receiver.feedback
+    controller.home_start_delay_s = 3.0
+    started = []
+    controller._start_reset = lambda feedback: started.append(feedback)
+    calls = []
+
+    def interrupt_on_second_window_step(seconds):
+        calls.append(seconds)
+        if len(calls) == 2:
+            raise KeyboardInterrupt()
+
+    controller._sleep = interrupt_on_second_window_step
+    controller.run()  # KeyboardInterrupt is handled inside run(), not propagated.
+    assert calls == [1.0, 1.0]
+    assert started == []
+    assert arm.movej_follow_commands == []
+
+
+def test_auto_home_typed_confirmation_is_opt_in(monkeypatch):
+    controller, arm, receiver = make_dls(
+        Q,
+        home_joint_deg=(0, 0, -60, 0, 60, 0),
+        auto_home_on_start=True,
+        home_start_confirmation=True,
     )
     controller._startup = lambda: None
     controller._checked_feedback = lambda *args, **kwargs: receiver.feedback
@@ -942,18 +1361,30 @@ def test_a_lead_past_the_hold_line_freezes_the_command_without_latching():
     assert controller._lag_hold_reason is not None
 
 
-def test_motion_preview_explains_a_hard_stop_hold(capsys, monkeypatch):
+def test_motion_preview_explains_a_direction_blocked_hold(capsys, monkeypatch):
+    """RankOneFK 只能沿 +x 走；请求 +y 时方向本身不可行，必须印出是「方向」的问题。
+
+    同一夹具下的 +x 请求（可行方向）必须被接受：这正是 2026-09-26 修掉的
+    「rank-deficient 位形下连唯一能走的方向也一起冻结」。
+    """
     controller, arm, receiver = make_dls(
         Q,
         dls_kinematics=RankOneFK(),
         dry_run=True,
         log_motion_debug=True,
     )
-    _preview(controller, receiver, monkeypatch)
+    _preview(controller, receiver, monkeypatch, delta=np.array([0.0, 0.004, 0.0]))
     out = capsys.readouterr().out
     assert "  DLS=hold_singularity 奇异比=0.00000" in out
-    assert "-> 保持(奇异硬停区)" in out
+    assert " 方向比=0.00000" in out
+    assert "-> 保持(该手柄方向不可行)" in out
     assert arm.movej_follow_commands == []
+
+    controller._last_preview_text = None
+    _preview(controller, receiver, monkeypatch, delta=np.array([0.004, 0.0, 0.0]))
+    out = capsys.readouterr().out
+    assert "  DLS=tracking" in out
+    assert "-> 已接受(未下发)" in out
 
 
 def test_motion_preview_prints_only_what_changed(capsys, monkeypatch):

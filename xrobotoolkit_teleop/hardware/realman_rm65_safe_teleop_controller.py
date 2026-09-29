@@ -71,6 +71,8 @@ class RM65ControlCore:
         home_joint_deg: tuple[float, float, float, float, float, float] | None = None,
         auto_home_on_start: bool = False,
         home_joint_tolerance_deg: float = 1.0,
+        home_start_confirmation: bool = False,
+        home_start_delay_s: float = 3.0,
         enable_home_path_preflight: bool = True,
         xr_watchdog_timeout_s: float = 0.20,
         max_tracking_error_m: float = 0.12,
@@ -261,6 +263,11 @@ class RM65ControlCore:
         self.home_joint_tolerance_rad = math.radians(
             self._positive(home_joint_tolerance_deg, "home_joint_tolerance_deg")
         )
+        # Startup auto-home does not stop for a typed phrase by default: the operator gets a
+        # printed destination plus a short grace window. --home-start-confirmation restores the
+        # exact-phrase gate; a zero delay removes the window (the trip itself is unchanged).
+        self.home_start_confirmation = bool(home_start_confirmation)
+        self.home_start_delay_s = self._non_negative(home_start_delay_s, "home_start_delay_s")
         self.auto_home_on_start = bool(auto_home_on_start)
         self.enable_home_path_preflight = bool(enable_home_path_preflight)
         if home_joint_deg is not None:
@@ -752,8 +759,9 @@ class RM65ControlCore:
             )
             if severity >= 1:
                 print(
-                    "[WARN] 实测位形处于 DLS 硬停区：每个遥操作周期都会保持不动。"
-                    "请先用示教器或拖动把机械臂挪出该位形，再重新握 Grip。"
+                    "[WARN] 实测位形处于 DLS 硬停区：只有『按手柄方向走不了』的命令会被保持，"
+                    "切向与退出方向仍放行（退出优先），速度压到最低档。"
+                    "若手感仍嫌不动，可先用示教器或拖动把机械臂挪出该位形，再重新握 Grip。"
                 )
             elif severity > 0:
                 print("[WARN] 实测位形处于 DLS 减速区：运动速度会被按比例降低。")
@@ -1025,6 +1033,8 @@ class RM65ControlCore:
                 "severity": None,
                 "scale": 0.0,
                 "damping": None,
+                "direction_ratio": None,
+                "direction_blocked": False,
                 "hold": True,
                 "seed_rad": None,
                 "measured_rad": None,
@@ -1127,6 +1137,8 @@ class RM65ControlCore:
                     joint_target_accepted=False,
                     singularity_sigma_ratio=result.ratio,
                     singularity_predicted_ratio=result.predicted_ratio,
+                    singularity_direction_ratio=result.direction_ratio,
+                    singularity_direction_blocked=result.direction_blocked,
                     singularity_speed_scale=result.scale,
                     singularity_damping=result.damping,
                     singularity_hold=result.hold,
@@ -1144,6 +1156,8 @@ class RM65ControlCore:
                     "scale": result.scale,
                     "lag_scale": lag_scale,
                     "damping": result.damping,
+                    "direction_ratio": result.direction_ratio,
+                    "direction_blocked": result.direction_blocked,
                     "hold": result.hold,
                     "seed_rad": np.asarray(seed, dtype=float).copy(),
                     "measured_rad": np.asarray(feedback.joint_rad, dtype=float).copy(),
@@ -1156,8 +1170,14 @@ class RM65ControlCore:
             if now - self._last_singularity_report_t >= self.singularity_report_interval_s:
                 # Only report a slow-down or a hold; normal tracking stays one line per change.
                 if result.hold or result.scale < 1:
+                    direction_text = (
+                        f" 方向比={result.direction_ratio:.5f}"
+                        if result.direction_ratio < self.dls.slowdown_ratio
+                        else ""
+                    )
                     print(
-                        f"[DLS] {result.status} 奇异比={result.ratio:.5f} 速度缩放={result.scale:.3f} "
+                        f"[DLS] {result.status} 奇异比={result.ratio:.5f}{direction_text} "
+                        f"速度缩放={result.scale:.3f} "
                         f"严重度={severity:.2f}" + (f" 原因={result.detail}" if result.detail else "")
                     )
                     self._last_singularity_report_t = now
@@ -1170,7 +1190,6 @@ class RM65ControlCore:
             if blocked is None and not self.dls.bounded_path_allowed(
                 seed,
                 target,
-                ratio=result.ratio,
                 angles=np.abs(seed[[2, 4]]),
                 lag_limit_rad=self._joint_lag_limit_rad,
             ):
@@ -1230,7 +1249,6 @@ class RM65ControlCore:
             if not self.dls.bounded_path_allowed(
                 fresh.joint_rad,
                 target,
-                ratio=result.ratio,
                 angles=np.abs(fresh.joint_rad[[2, 4]]),
                 lag_limit_rad=self._joint_lag_limit_rad,
             ):
@@ -1701,6 +1719,8 @@ class RM65ControlCore:
             "singularity_sigma_min": None,
             "singularity_sigma_ratio": None,
             "singularity_predicted_ratio": None,
+            "singularity_direction_ratio": None,
+            "singularity_direction_blocked": None,
             "singularity_severity": None,
             "singularity_speed_scale": None,
             "lag_speed_scale": None,
@@ -1832,8 +1852,9 @@ class RM65ControlCore:
         if info is not None and info["hold"]:
             status = info["status"]
             if status == "hold_singularity":
-                stop_ratio = self.dls.stop_ratio
-                reason = "奇异硬停区" if info["ratio"] is not None and info["ratio"] <= stop_ratio else "无可用步"
+                # Two different refusals: the handle asked for a direction this configuration
+                # cannot walk, or the structural J3/J5 guard rejected every candidate.
+                reason = "该手柄方向不可行" if info.get("direction_blocked") else "无可用步"
             else:
                 reason = {
                     "hold_at_target": "已到达目标",
@@ -1871,6 +1892,11 @@ class RM65ControlCore:
             tail = f"  DLS={info['status']}"
             if info["ratio"] is not None:
                 tail += f" 奇异比={info['ratio']:.5f}"
+            # Only printed once the commanded direction itself is throttled: this is the
+            # number that answers "can the arm still walk where my hand is going".
+            direction_ratio = info.get("direction_ratio")
+            if direction_ratio is not None and direction_ratio < self.dls.slowdown_ratio:
+                tail += f" 方向比={direction_ratio:.5f}"
             if info["scale"] < 1.0:
                 tail += f" 速度缩放={info['scale']:.2f}"
             if info.get("lag_scale", 1.0) < 1.0:
@@ -2027,13 +2053,35 @@ class RM65ControlCore:
                         print("[DRY RUN] 已配置固定六轴 Home；dry run 跳过启动回位")
                     else:
                         phrase = "HOME " + " ".join(format(value, ".10g") for value in np.rad2deg(self.home_joint_rad))
-                        answer = input(
-                            "[HOME] 请确认整条回程路径净空、急停就绪，且允许机械臂低速移动到 "
-                            f"{phrase[5:]}。请输入 '{phrase}'："
+                        print(
+                            "[HOME] 实测关节偏离固定六轴 Home "
+                            f"{math.degrees(joint_error):.3f}°（容差 {math.degrees(self.home_joint_tolerance_rad):.3f}°），"
+                            f"将低速移动到 {phrase[5:]}；请确认整条回程路径净空、急停就绪"
                         )
-                        if answer.strip() != phrase:
-                            print("[HOME] 未收到确认口令；已取消启动回位")
-                            return
+                        if self.home_start_confirmation:
+                            answer = input(
+                                "[HOME] 请确认整条回程路径净空、急停就绪，且允许机械臂低速移动到 "
+                                f"{phrase[5:]}。请输入 '{phrase}'："
+                            )
+                            if answer.strip() != phrase:
+                                print("[HOME] 未收到确认口令；已取消启动回位")
+                                return
+                        else:
+                            print(
+                                "[HOME] 启动自动回位不再要求输入确认口令（--home-start-confirmation 可恢复）；"
+                                f"{self.home_start_delay_s:g}s 缓冲后开始，期间可按 Ctrl+C 或拍急停中止"
+                            )
+                            remaining_s = self.home_start_delay_s
+                            while remaining_s > 1e-9:
+                                # Round up so a fractional window reads 3-2-1 instead of repeating
+                                # a label or announcing a "0s" start that then still waits.
+                                print(f"[HOME] {math.ceil(remaining_s)}s 后开始启动回位（Ctrl+C 中止）")
+                                step_s = min(1.0, remaining_s)
+                                self._sleep(step_s)
+                                remaining_s -= step_s
+                        # The typed gate may have held the process (and the grace window certainly
+                        # did), so re-read fresh feedback before planning the trip from where the
+                        # arm is now, not from where it was when the notice was printed.
                         feedback = self._checked_feedback(self._monotonic(), require_fresh=True, check_tracking=False)
                         if feedback is None:
                             return

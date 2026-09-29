@@ -143,6 +143,10 @@ def test_recommended_hardware_entrypoint_does_not_apply_an_extra_xy_inversion(mo
     # The fixed-Home path preflight is off by default: a start pose on the far side of a
     # J3/J5 zero must not block the return.
     assert captured["enable_home_path_preflight"] is False
+    # Startup auto-home no longer stops for a typed phrase: the grace window is the default
+    # and --home-start-confirmation is the opt-in way back to the exact phrase gate.
+    assert captured["home_start_confirmation"] is False
+    assert captured["home_start_delay_s"] == 3.0
     assert captured["scale_factor"] == 1.0
     assert captured["rotation_scale_factor"] == 0.25
     # The per-Grip translation envelope is off at the hardware entry (the controller library

@@ -33,6 +33,8 @@ def main(
     home_joint_deg: tuple[float, float, float, float, float, float] = (0, 0, -60, 0, 60, 0),
     auto_home_on_start: bool = True,
     home_joint_tolerance_deg: float = 1.0,
+    home_start_confirmation: bool = False,
+    home_start_delay_s: float = 3.0,
     enable_home_path_preflight: bool = False,
     xr_watchdog_timeout_s: float = 0.20,
     max_tracking_error_m: float = 0.12,
@@ -100,8 +102,15 @@ def main(
     J3/J5 crossing, singularity and TCP-workspace verdicts become console warnings
     instead of refusals. Pass --enable-home-path-preflight to restore the hard
     preflight, which refuses any reset whose straight joint path crosses a zero.
-    Either way the operator still confirms that the whole path is clear before a
-    reset starts; the preflight is not collision detection.
+
+    Startup auto-home (--auto-home-on-start) does not stop for a typed phrase: when the
+    measured joints differ from the fixed Home by more than --home-joint-tolerance-deg,
+    the controller prints the deviation and the destination, waits --home-start-delay-s
+    (default 3 s; Ctrl+C or the emergency stop cancels) and then starts the same
+    low-speed reset the B button uses. Pass --home-start-confirmation to restore the old
+    exact phrase gate, or --home-start-delay-s 0 to remove the grace window. Confirming
+    that the whole return path is clear stays the operator's job either way; the
+    preflight is not collision detection.
 
     The per-Grip translation envelope is off by default here (--max-offset-m defaults to
     None instead of the controller's 0.15 m): the mapped hand offset is added to the
@@ -166,6 +175,8 @@ def main(
         home_joint_deg=home_joint_deg if fixed_home_enabled else None,
         auto_home_on_start=auto_home_on_start and fixed_home_enabled,
         home_joint_tolerance_deg=home_joint_tolerance_deg,
+        home_start_confirmation=home_start_confirmation,
+        home_start_delay_s=home_start_delay_s,
         enable_home_path_preflight=enable_home_path_preflight,
         xr_watchdog_timeout_s=xr_watchdog_timeout_s,
         max_tracking_error_m=max_tracking_error_m,

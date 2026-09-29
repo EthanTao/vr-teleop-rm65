@@ -1,7 +1,25 @@
 """Local differential IK; only the returned, guarded joint step may be sent.
 
 Uses official FK in explicitly configured work/TCP frames, never the display URDF.
-Linear Jacobian rows are normalized by 0.3 m before SVD and damping.
+Linear Jacobian rows are normalized by 0.3 m before SVD.
+
+Direction policy (2026-09-26 revision)
+-------------------------------------
+The step is the *minimum-norm* least-squares solution, i.e. the least joint motion that
+realizes the operator's Cartesian direction, and the singularity only limits how fast that
+direction may be walked:
+
+* the requested direction is never rotated. The previous damped least-squares weights
+  ``sigma / (sigma^2 + lambda^2)`` attenuated the weakly conditioned components far more
+  than the strong ones, so the achieved motion drifted towards "a direction that still
+  works" while the handle asked for another one;
+* a direction whose *effective* Jacobian gain ``sigma_eff = |e| / |J+ e|`` falls below the
+  hard stop line cannot be walked at all, so the solver holds instead of burning the joint
+  budget on a direction with no Cartesian progress. That is the direction-level counterpart
+  of ``sigma_min / sigma_max``;
+* leaving a singular configuration always has priority: a structurally outward step is
+  admitted even when its gain is inside the hard stop line, and the joint-space guard only
+  rejects steps that make an affected J3/J5 axis *worse*.
 """
 
 from dataclasses import dataclass
@@ -82,6 +100,14 @@ class DampedStep:
     status: str
     # Human-readable reason for this step or refusal; diagnostics only, never a control input.
     detail: str = ""
+    # Effective Jacobian gain of the commanded direction, ``sigma_eff / sigma_max`` in (0, 1].
+    # It is the direction-level counterpart of ``ratio``: a large value means the operator's
+    # direction is easy for the arm, a value at or below ``stop_ratio`` means it cannot be
+    # walked at all. Diagnostics and the hold decision only.
+    direction_ratio: float = 1.0
+    # True when the hold comes from that direction-level test rather than from the structural
+    # J3/J5 guard, so the console can say *why* the arm is not following the handle.
+    direction_blocked: bool = False
 
     @property
     def hold(self):
@@ -252,10 +278,14 @@ class DampedIK:
     def path_allowed(self, q, target):
         """Check ordered local samples, with explicit J3/J5 zero crossing rejection.
 
-        In a hard zone only strictly improving affected metrics may move; at an
-        exact singularity unavailable Cartesian directions are held, not invented.
-        Verdicts are cached per cycle: the caller asks the same question again after
-        rounding the step, and repeating it would rebuild four Jacobians for nothing.
+        Legacy, *not* on the hardware path (the realtime path uses the constant-time
+        :meth:`bounded_path_allowed`): it samples four Jacobians per call. It still encodes
+        the pre-2026-09-26 blanket policy - "a hard zone may only move when an affected metric
+        strictly improves, and a configuration ratio at or below the stop line holds every
+        step" - so it is deliberately left unchanged for the offline cache/benchmark tooling
+        and must not be used to decide motion. Verdicts are cached per cycle: the caller asks
+        the same question again after rounding the step, and repeating it would rebuild four
+        Jacobians for nothing.
         """
         key = (tuple(np.asarray(q, dtype=float)), tuple(np.asarray(target, dtype=float)))
         cached = self._path_cache.get(key)
@@ -265,14 +295,22 @@ class DampedIK:
         self._path_cache[key] = verdict
         return verdict
 
-    def bounded_path_allowed(self, q, target, *, ratio, angles, lag_limit_rad=None):
+    def bounded_path_allowed(self, q, target, *, angles, lag_limit_rad=None):
         """Constant-time realtime guard which never evaluates another Jacobian.
 
-        The DLS step is already velocity/acceleration limited. This guard adds
-        exact J3/J5 zero-crossing protection and only permits motion from a hard
-        structural singularity when every affected joint moves outward. If the
-        SVD ratio alone is already in the hard zone, there is no cheap, reliable
-        escape proof, so the realtime path holds instead of searching.
+        The DLS step is already velocity/acceleration limited. This guard adds the structural
+        joint-space rules and is deliberately one-sided: it rejects a J3/J5 zero crossing,
+        rejects *entering* the J3/J5 hard zone from outside, and inside the hard zone rejects
+        only a step that makes an affected axis worse. Tangential motion inside the hard zone
+        and every outward step pass, so the operator can keep following the handle (slowly)
+        and can always drive back out.
+
+        The previous revision also required a hard-zone step to *strictly* improve an affected
+        axis and held every step whenever the configuration ratio was already at or below the
+        stop line. Both clauses froze the arm in every direction except the escape one, which
+        is what "the arm stops following the handle near the singularity" looked like on site.
+        The direction-level decision ("can this commanded direction be walked at all") now
+        lives in :meth:`step`, where the Jacobian is already available.
 
         ``lag_limit_rad`` keeps every structural guard and additionally allows one case the
         seed-only criterion cannot express: the seed is a command the arm has not finished
@@ -280,11 +318,10 @@ class DampedIK:
         When the target is within ``lag_limit_rad`` of the measured joints, the hard J3/J5
         hard-zone *entry* rejection is dropped, but the exact J3/J5 zero-crossing rejection
         is still evaluated from the measured joints - the position the arm physically
-        occupies. Passing ``None`` keeps the original seed-only criterion.
+        occupies. Passing ``None`` keeps the seed-only criterion.
         """
         q = _finite_vector(q, 6, "path start")
         target = _finite_vector(target, 6, "path target")
-        ratio = float(ratio)
         angles = _finite_vector(angles, 2, "singularity joint angles")
         within_measured_step = False
         if lag_limit_rad is not None:
@@ -297,21 +334,17 @@ class DampedIK:
         if q3 * target3 < 0.0 or q5 * target5 < 0.0:
             return False
         next_angles = np.abs(target[[2, 4]])
-        hard = angles <= self.stop_joint_rad
         if within_measured_step:
             # One bounded catch-up step measured from where the arm actually is. It may not
             # enter the J3/J5 hard zone and may not make a hard-zone axis worse than measured.
             return not bool(np.any(next_angles < np.minimum(angles, self.stop_joint_rad) - 1e-10))
-        if ratio <= self.stop_ratio and not np.any(hard):
-            return False
+        hard = angles <= self.stop_joint_rad
         if np.any(hard):
-            if np.any(next_angles[hard] < angles[hard] - 1e-10):
-                return False
-            if not np.any(next_angles[hard] > angles[hard] + 1e-10):
-                return False
-        elif np.any(next_angles < self.stop_joint_rad):
-            return False
-        return True
+            # Already inside the hard zone: only *going deeper* on an affected axis is
+            # refused. A tangential step keeps that axis where it is and must pass; so must
+            # the escape step. Axes outside the hard zone keep the seed-only criterion.
+            return not bool(np.any(next_angles[hard] < angles[hard] - 1e-10))
+        return not bool(np.any(next_angles < self.stop_joint_rad))
 
     def _path_allowed_uncached(self, q, target):
         ratio, angles = self.metrics(q)
@@ -363,6 +396,13 @@ class DampedIK:
         1.0 means "full speed" and 0.0 means "hold here". It is deliberately applied to
         the already acceleration-limited velocity, which keeps the reported speed
         monotonic instead of producing a one-cycle spike.
+
+        The returned step walks the operator's direction (see the module docstring): it is
+        shortened, never rotated. ``hold_singularity`` is returned when that direction cannot
+        be walked at all (``direction_blocked``) or when the structural J3/J5 guard rejects
+        every candidate; ``escaping`` is reported when the step moves an affected J3/J5 axis
+        outward. The singularity is a speed limit on the requested direction, not a reason to
+        choose a different direction.
         """
         if reset_cycle:
             self.begin_cycle(enforce_budget=True)
@@ -389,6 +429,9 @@ class DampedIK:
         angles = np.abs(q[[2, 4]])
         self._metric_cache[_finite_tuple(q, 6, "seed")] = ratio
         severity = self.severity(ratio, angles)
+        # Diagnostic only: the step below no longer uses direction damping. A damped
+        # least-squares weight attenuates the weakly conditioned components more than the
+        # strong ones, which rotates the achieved motion away from the commanded direction.
         damping = max(0.001, self.max_damping * severity)
         scale = max(self.min_speed_scale, 1 - severity)
 
@@ -404,11 +447,15 @@ class DampedIK:
                 damping,
                 status,
                 detail,
+                direction_ratio,
+                blocked_direction,
             )
             if reset_cycle:
                 self.end_cycle()
             return value
 
+        direction_ratio = 1.0
+        blocked_direction = False
         error = np.concatenate((xyz - origin, shortest_world_rotation_vector(orientation, quat)))
         if np.linalg.norm(error[:3]) < 1e-7 and np.linalg.norm(error[3:]) < 1e-6:
             return result(q, "hold_at_target", detail="目标位姿已到达")
@@ -419,7 +466,21 @@ class DampedIK:
             max_angular_speed * dt / max(np.linalg.norm(error[3:]), 1e-15),
         )
         error[:3] /= self.length
-        delta = vt.T @ ((s / (s * s + damping * damping)) * (u.T @ error))
+        # Minimum-norm least-squares step: the least joint motion that realizes the commanded
+        # direction. Only the components the arm cannot produce are projected away; no
+        # weighting may rotate the rest, or the arm walks where the operator did not ask.
+        # The floor is purely numerical: the very directions it caps are the ones the
+        # direction test below refuses anyway.
+        sigma_max = max(float(s[0]), 1e-12)
+        weights = 1.0 / np.maximum(s, sigma_max * 1e-9)
+        delta = vt.T @ (weights * (u.T @ error))
+        delta_norm = float(np.linalg.norm(delta))
+        # Effective Jacobian gain of this command direction, ``|e| / |J+ e| / sigma_max``:
+        # the direction-level counterpart of ``sigma_min / sigma_max``. A direction near the
+        # hard stop line needs ~100x the joint motion of the best direction, so it cannot be
+        # walked within one control period; that is a "hold", not a reason to pick another way.
+        direction_ratio = 0.0 if delta_norm <= 0.0 else float(np.linalg.norm(error)) / delta_norm / sigma_max
+        blocked_direction = bool(direction_ratio <= self.stop_ratio)
         delta *= min(1.0, float(np.min(speeds * dt / np.maximum(np.abs(delta), 1e-15))))
         # A hard-zone speed floor is only granted for an unambiguous local
         # J3/J5 outward direction. No second Jacobian is built to search for it.
@@ -432,9 +493,32 @@ class DampedIK:
         )
         if improving:
             scale = max(scale, self.escape_speed_scale)
+        if blocked_direction and not improving:
+            # The handle asks for a direction this configuration cannot walk. Stop here
+            # instead of redistributing the request into a direction that still works.
+            return result(
+                q,
+                "hold_singularity",
+                detail=(
+                    f"手柄方向不可行：该方向的等效奇异比 {direction_ratio:.5f} ≤ 硬停线 {self.stop_ratio:g}"
+                    "（σ_eff/σ_max；该方向的等效关节代价超过本周期预算）；"
+                    "保持不动，切向与退出方向不受影响"
+                ),
+            )
         velocity = delta * scale / dt
         old = np.zeros(6) if previous_velocity is None else _finite_vector(previous_velocity, 6, "previous velocity")
-        velocity = old + np.clip(velocity - old, -max_joint_acceleration * dt, max_joint_acceleration * dt)
+        # The acceleration limit is ONE common factor on this cycle's velocity change, not a
+        # per-joint clip. A per-joint clip saturates the fast joints more than the slow ones, so
+        # it rotates the commanded direction: at the start of a segment (previous velocity zero)
+        # the first step could end up pointing away from the target, the candidate was refused
+        # with "reachable error grew", the stream was held and cleared, and the identical refusal
+        # repeated - the arm never started moving in that direction at all. Every joint still
+        # changes by at most ``max_joint_acceleration * dt``; the slow joints now change by less.
+        change = velocity - old
+        allowed_change = max_joint_acceleration * dt
+        peak_change = float(np.max(np.abs(change)))
+        if peak_change > allowed_change:
+            velocity = old + change * (allowed_change / peak_change)
         velocity = np.clip(velocity, -speeds * scale, speeds * scale)
         delta = velocity * dt
         # Tracking-allowance governor: one common factor preserves the commanded
@@ -461,7 +545,7 @@ class DampedIK:
             if np.any((q >= lo) & (candidate < lo)) or np.any((q <= hi) & (candidate > hi)):
                 rejected.append("关节软限位余量")
                 continue
-            if not self.bounded_path_allowed(q, candidate, ratio=ratio, angles=angles):
+            if not self.bounded_path_allowed(q, candidate, angles=angles):
                 rejected.append("奇异路径守卫")
                 continue
             xp, rp = self.forward(candidate)
@@ -470,10 +554,10 @@ class DampedIK:
                 rejected.append("可达误差反而变大")
                 continue
             return result(candidate, "escaping" if improving and severity else "tracking", effective_scale * factor)
-        if ratio <= self.stop_ratio and not np.any(angles <= self.stop_joint_rad):
-            context = f"奇异比 {ratio:.5f} ≤ 硬停线 {self.stop_ratio:g}：处于硬停区，无可用方向"
+        if blocked_direction:
+            context = f"手柄方向不可行：该方向的等效奇异比 {direction_ratio:.5f} ≤ 硬停线 {self.stop_ratio:g}"
         elif np.any(angles <= self.stop_joint_rad):
-            context = "J3/J5 处于 5° 硬区，且没有向外步"
+            context = "J3/J5 处于 5° 硬区，且没有不加深该轴的步"
         else:
             context = f"奇异比 {ratio:.5f} 高于硬停线 {self.stop_ratio:g}"
         return result(

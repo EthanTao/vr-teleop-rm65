@@ -33,6 +33,9 @@ python scripts/simulation/teleop_rm65_sim.py \
 推荐入口默认使用 `damped_ik_movej_follow`：独立 UDP 反馈、笛卡尔限速、奇异区域降速、阻尼 IK 和受限关节目标跟随。运行容器需要睿尔曼 API2 SDK，并核对工作/工具帧配置；详见[真机安全与故障处理](docs/真机安全与故障处理.md)。先确认机械臂实时推送已指向运行本程序的主机 UDP `8089`，并包含 `joint_status`、`waypoint` 和错误信息。
 
 ```bash
+# 0. 只读监视六轴角与奇异点余量（占用 UDP 8089，先停掉其他接收程序）
+python scripts/hardware/read_arm_state.py
+
 # 1. 只读 TCP 预检（不发送运动指令）
 python scripts/hardware/preflight_realman_rm65.py --arm-host 192.168.10.18 --arm-port 8080
 
@@ -43,7 +46,7 @@ python scripts/hardware/teleop_realman_rm65_safe_hardware.py --arm-host 192.168.
 python scripts/hardware/teleop_realman_rm65_safe_hardware.py --arm-host 192.168.10.18 --max-offset-m 0.03
 ```
 
-真机默认以同一组六轴角度为 Home。若启动时未到位，先检查现场回程净空和急停，再在终端输入 `HOME 0 0 -60 0 60 0` 才会自动低速回位；B 键随后也返回该关节姿态，并核对 UDP 六轴反馈。回位路径预检默认**关闭**：起点在 J3/J5 零位另一侧时回位改为关节空间插值直发，穿越零位/奇异硬区只打印 `[HOME] 注意：…` 提示；加 `--enable-home-path-preflight` 可恢复拒绝式预检。
+真机默认以同一组六轴角度为 Home。若启动时实测关节与它的偏差超过 `1°`，控制器会打印偏差量和目标角度，留 `3 s` 缓冲（期间可 `Ctrl+C` 或拍急停中止）后自动低速回位，**不再要求输入确认口令**；需要恢复旧口令门（输入 `HOME 0 0 -60 0 60 0` 才回位）加 `--home-start-confirmation`，取消缓冲加 `--home-start-delay-s 0`。B 键随后也返回该关节姿态，并核对 UDP 六轴反馈。回位路径预检默认**关闭**：起点在 J3/J5 零位另一侧时回位改为关节空间插值直发，穿越零位/奇异硬区只打印 `[HOME] 注意：…` 提示；加 `--enable-home-path-preflight` 可恢复拒绝式预检。
 
 默认 `move_v=5`、TCP 线速度上限 `0.05 m/s`、角速度上限 `0.25 rad/s`；默认幅度为平移比例 `--scale-factor 1.0`、旋转比例 `--rotation-scale-factor 0.25`、旋转包络 `--max-rot-offset-rad 0.20`（约 11.5°），平移死区默认为 0。**单次 Grip 平移包络入口默认不设限**（`--max-offset-m` 默认 `None`，控制器库默认仍为 `0.15`）：手柄位移 1:1 直接进目标，一段 Grip 内仍受 TCP 工作空间盒（每轴 `±1.0 m`，上机前应按现场收窄）、XR 单帧跳变门槛、关节限位/超速与跟随余量限制；失去的是单段**累计漂移**上限。首次真机验收用命令行显式收紧行程（`--max-offset-m 0.03`）；关节速度超过 RM65-B 型号上限的 10% 时立即硬停止并锁存。故障后松开 Grip，待六轴静止且反馈正常即重新使能；若故障时 Grip 已松开，需先扣住再松开一次。B 键只用于回固定 Home；正常松开 Grip 使用软停止。首次上机仍必须保证安全初始姿态、净空、急停可触达并有现场监护，自动化测试不能替代真机验收。
 
@@ -138,6 +141,9 @@ ssh rm@192.168.0.115 "sudo docker exec -w /workspace xrobo-vr-teleop python scri
 
 ```text
 vr-teleop-rm65/
+├── README.md                 # 本文件：快速开始、依赖、目录说明
+├── CLAUDE.md                 # 项目规范、架构与 12 条注意事项（AGENTS.md 只有一行指向它）
+├── pyproject.toml            # 依赖、打包与 pytest/black 配置
 ├── teleop.py                 # 本地统一启动器：仿真 / Dry Run / 真机 / 同步
 ├── xrobotoolkit_teleop/      # 核心库（控制器、XR 客户端、协议层）
 │   ├── common/               #   抽象基类、XR 客户端
@@ -146,9 +152,9 @@ vr-teleop-rm65/
 │   └── utils/                #   几何运算、Meshcat 工具
 ├── scripts/
 │   ├── simulation/           # 仿真入口
-│   ├── hardware/             # 真机入口
+│   ├── hardware/             # 真机入口、只读预检与状态监视
 │   ├── tools/                # 辅助工具（安装/验证/启动 Viewer）
-│   └── debug/                # 调试脚本
+│   └── debug/                # 调试与离线复算脚本
 ├── assets/realman/           # RM65 URDF 模型（官方 + SW 导出）
 ├── config/                   # 参数参考 JSON；shared-dls 另读取控制器标定快照
 ├── docker/                   # Docker 构建文件
@@ -156,13 +162,27 @@ vr-teleop-rm65/
 │   ├── research/             # 研究报告、导师版方案与 drafts/ 原始草稿
 │   ├── plans/                # 设计提案（状态以文档和日志为准）
 │   └── archive/              # 历史文档原文，不作为当前操作说明
-└── tests/                    # 单元测试
+├── tests/                    # 单元测试（conftest.py 把临时目录钉在 build/tmp）
+└── build/                    # 唯一的「生成物 / 临时 / 历史备份」目录，整体被 Git 忽略
+    ├── archive/              #   历史备份：整理前的文档与代码原文、旧基线、探针草稿
+    └── tmp/                  #   运行期临时目录（pytest 等）
 ```
+
+**根目录纪律**：根目录只放源码（`xrobotoolkit_teleop/`、`scripts/`、`tests/`）、素材（`assets/`、`config/`、`docker/`）、文档（`docs/`、`README.md`、`CLAUDE.md`）和入口（`teleop.py`、`pyproject.toml`）；任何生成物、缓存、临时目录、历史备份一律进 `build/`，需要长期保留的整理备份放 `build/archive/`。2026-09-26 的清理清单（含被删项的 SHA-256）在 `build/archive/layout-cleanup-2026-09-26.json`。
+
+除上面这些，文件树里还会看到 `build/` 和几个点开头的目录，它们都不属于项目内容：
+
+| 目录 | 是什么 | 是否入库 |
+| --- | --- | --- |
+| `build/` | 生成物 / 临时 / 历史备份，唯一的垃圾箱 | 忽略 |
+| `.ccf_research/` | 投稿调研的来源快照（约 49 MB，本机留存） | 忽略 |
+| `.agents/` | 项目自带的 AI skill（`rm65-real-robot-ik`） | **入库** |
+| `.codex/`、`.superpowers/`、`.vscode/` | 本机 AI 工具与编辑器配置 | 忽略 |
 
 ## 不含
 - 多机器人（UR5 等）相关代码
 - Placo IK 真机路径（真机默认官方 FK + DLS + 受限 `movej_follow`，详见奇异区域保护说明）
-- RM65 mesh 二进制（需补齐 `assets/realman/*/meshes/`）
+- 其它机型的 URDF/mesh：`assets/realman/` 只放 RM65 的两个变体，且 14 个 STL 已随仓库入库（无需另找）
 
 ## 历史代码与生成物
 
@@ -172,4 +192,4 @@ vr-teleop-rm65/
 
 `config/rm65_dls_calibration.json` 是另一类文件：它保存控制器 DH/工具帧，由 `shared-dls` 显式读取，且被 Git 忽略。不要将两类快照的加载行为混淆。
 
-研究报告统一放在 `docs/research/`，原始分题草稿放在其 `drafts/` 下；`.ccf_research/` 保留投稿调研的来源快照和辅助脚本。测试报告与缓存通过 `.gitignore` 排除，现有临时目录和历史备份保留。
+研究报告统一放在 `docs/research/`，原始分题草稿放在其 `drafts/` 下；`.ccf_research/` 保留投稿调研的来源快照和辅助脚本。测试报告、缓存与打包产物通过 `.gitignore` 排除，并统一落在 `build/`（`build/archive/` 存历史备份、`build/tmp/` 存运行期临时）。2026-09-26 已清空根目录下沙箱测试残留的空 `tmpXXXXXXXX` 目录、旧打包副本与过期测试报告，并给 `teleop.py` 与 `tests/conftest.py` 补上「临时目录不许落回仓库根」的兜底。

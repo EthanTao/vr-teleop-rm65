@@ -118,10 +118,12 @@ def main() -> int:
         print(f"\n  lowest-ratio solution: ratio={ratio:.5f}")
         if ratio <= args.stop_ratio:
             zone = (
-                "stop band: speed scale floor + max damping, and the path filter only allows strictly improving moves"
+                "stop band: speed scale floor; since 2026-09-26 the stop line is judged "
+                "per commanded direction (sigma_eff/sigma_max) and only blocks the direction "
+                "that cannot be walked - tangential and outward steps still pass"
             )
         elif ratio <= args.slowdown_ratio:
-            zone = "hard-slowdown band: speed scale at floor (>=0.05) and max damping 0.08"
+            zone = "hard-slowdown band: speed scale at floor (>=0.05); direction damping removed 2026-09-26"
         else:
             zone = "clear"
         print(f"  DLS zone: {zone}")
