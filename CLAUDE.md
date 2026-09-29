@@ -53,6 +53,15 @@ python scripts/tools/run_validation.py
 # 调试脚本（极限验证、Meshcat 连通性等）
 python scripts/debug/check_limits.py
 
+# 真机验收判定（配合 --motion-log-path 录到的 JSONL；退出码 0 = 判据全过，2 = 未通过）
+python scripts/debug/report_teleop_acceptance.py logs/motion.jsonl
+# 逐轴方向定案（从日志拟合「手柄→末端」映射矩阵，不需要额外试动作）
+python scripts/debug/estimate_teleop_mapping.py logs/motion.jsonl
+# 每段「手动了多少 / 臂实际动了多少」
+python scripts/debug/analyze_motion_log.py logs/motion.jsonl
+# 查看实时 UDP 数据报里到底推了哪些通道（含是否有 joint_current）
+python scripts/debug/dump_udp_frame.py
+
 # Docker 构建启动
 docker compose -f docker/docker-compose.yml up --build
 ```
