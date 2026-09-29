@@ -218,10 +218,23 @@ def analyse(path: str | Path) -> dict:
 
     report["states"] = sorted({str(row.get("state")) for row in cycles})
     report["dry_run"] = sorted({bool(row.get("dry_run")) for row in cycles})
+    # 整场时长直接由日志时间戳得出，不假设控制频率。
+    stamps = [float(row["t_monotonic"]) for row in cycles if row.get("t_monotonic") is not None]
+    report["duration_s"] = None if len(stamps) < 2 else float(max(stamps) - min(stamps))
     report["target_cycles"] = sum(1 for row in cycles if _vec3(row, "target_xyz") is not None)
     report["command_cycles"] = sum(1 for row in cycles if _vec3(row, "command_xyz") is not None)
     report["measured_cycles"] = sum(1 for row in cycles if _vec3(row, "measured_tcp_xyz_m") is not None)
     report["fault_cycles"] = sum(1 for row in cycles if row.get("fault_reason"))
+    # 锁存是**持续状态**，所以验收要数「事件次数」而不是「周期数」：
+    # 每次 fault_reason 由空变非空算一次锁存。
+    report["fault_episodes"] = int(
+        sum(
+            1
+            for previous, current in zip(cycles, cycles[1:])
+            if not previous.get("fault_reason") and current.get("fault_reason")
+        )
+        + (1 if cycles and cycles[0].get("fault_reason") else 0)
+    )
 
     all_segments = segments(cycles)
     report["segment_count"] = len(all_segments)
