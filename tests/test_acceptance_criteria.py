@@ -24,6 +24,7 @@ def _motion_report(
     has_measured_tcp: bool = True,
     total_cycles: int = 6000,
     log_complete: bool = True,
+    dry_run: bool = False,
 ) -> dict:
     return {
         "has_measured_tcp": has_measured_tcp,
@@ -34,6 +35,7 @@ def _motion_report(
         "log_end": {"type": "log_end", "dropped_rows": 0, "error": None} if log_complete else None,
         "log_dropped_rows": 0,
         "log_error": None,
+        "dry_run": [dry_run],
         "segments": (
             segments if segments is not None else [_segment(100, 0.95), _segment(120, 0.9), _segment(80, 0.85)]
         ),
@@ -300,3 +302,37 @@ def test_main_fails_on_a_log_that_was_never_closed(tmp_path):
     path.write_text("\n".join(json.dumps(row) for row in _clean_synthetic_rows()[:-1]) + "\n", encoding="utf-8")
 
     assert ac.main([str(path), "--no-mapping"]) == 2
+
+
+def test_dry_run_log_fails_the_live_run_check_with_a_clear_reason():
+    """dry-run 下机械臂不动、跟随比必然接近 0；必须说清「这不是运动验收」而不是满屏 ❌。"""
+    verdict = ac.evaluate(_motion_report(dry_run=True), _mapping_report())
+
+    assert verdict["passed"] is False
+    check = _by_name(verdict)["为真实运行（非 dry-run）"]
+    assert check["passed"] is False
+    assert "dry-run" in check["note"]
+
+
+def test_live_run_passes_the_live_run_check():
+    verdict = ac.evaluate(_motion_report(dry_run=False), _mapping_report())
+
+    assert _by_name(verdict)["为真实运行（非 dry-run）"]["passed"] is True
+
+
+def test_live_run_check_can_be_turned_off_for_dry_run_diagnostics():
+    """dry-run 日志对「目标链是否连通」仍有诊断价值；显式关掉时不该拦住分析。"""
+    verdict = ac.evaluate(_motion_report(dry_run=True), _mapping_report(), {"require_live_run": False})
+
+    assert "为真实运行（非 dry-run）" not in _by_name(verdict)
+
+
+def test_missing_dry_run_flag_is_treated_as_not_live():
+    """日志里没有 dry_run 字段时按「不是真实运行」处理 —— fail-closed。"""
+    motion = _motion_report()
+    del motion["dry_run"]
+
+    verdict = ac.evaluate(motion, _mapping_report())
+
+    assert verdict["passed"] is False
+    assert _by_name(verdict)["为真实运行（非 dry-run）"]["passed"] is False

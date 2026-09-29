@@ -39,6 +39,9 @@ DEFAULT_CRITERIA: dict[str, float | int | bool] = {
     # 证据必须完整：日志正常收尾、无丢行、无写入错误。放在第一条 ——
     # 一份被截断的日志看起来与完整的一模一样，先确认证据可信再谈数字。
     "require_complete_log": True,
+    # 必须是真实运行：--dry-run 下机械臂根本不运动，跟随比必然接近 0，
+    # 不提这一条的话判据会给出满屏误导性的 ❌，而不是「这不是一次运动验收」。
+    "require_live_run": True,
     # 记录必须带实测末端位姿，否则「臂实际动了多少」无从计算
     "require_measured_tcp": True,
     # 整场最短时长与有效段
@@ -88,6 +91,20 @@ def evaluate(
             reasons.append(f"写入错误：{motion_report['log_error']}")
         checks.append(
             _check("日志证据完整", complete, complete, True, "；".join(reasons) or "正常收尾、无丢行、无写入错误")
+        )
+
+    if limits["require_live_run"]:
+        flags = motion_report.get("dry_run")
+        # `analyse()` 把它记成「出现过的取值集合」，例如 [False] 或 [True]。
+        is_live = flags is not None and True not in list(flags)
+        checks.append(
+            _check(
+                "为真实运行（非 dry-run）",
+                is_live,
+                "live" if is_live else "dry-run",
+                "live",
+                "" if is_live else "本次是 --dry-run：机械臂没有运动，跟随比必然接近 0，不能作为运动验收",
+            )
         )
 
     if limits["require_measured_tcp"]:
