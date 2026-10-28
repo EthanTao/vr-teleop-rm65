@@ -1,0 +1,210 @@
+# RM65 VR 遥操作包
+
+Realman RM65 侧装 VR 遥操作项目，包含仿真、真机控制、验证工具与研究资料。
+
+**末端灵巧手**：傲意科技（OYMotion）**ROH-LiteS001**，**没有独立力传感器**（用户于 2026-10-25 确认）。硬件配置与传感边界见[项目交接 §2.1](docs/项目交接.md#21-硬件与网络)。
+
+> **文档入口**：完整索引见 [docs/README.md](docs/README.md)。核心 5 篇：系统全貌与可复现流程见 [docs/项目交接.md](docs/项目交接.md)；新手操作手册见 [docs/仿真操作手册.md](docs/仿真操作手册.md)；真机安全与故障解锁见 [docs/真机安全与故障处理.md](docs/真机安全与故障处理.md)；RM65 参数与坐标系语义见 [docs/RM65参数与坐标系.md](docs/RM65参数与坐标系.md)；历史决策与已废弃结论见 [docs/决策与结论汇总.md](docs/决策与结论汇总.md)。
+
+研究选题、数据集与投稿资料见 [研究资料索引](docs/research/README.md)；最近的实现变更见 [工作日志索引](docs/README.md#工作日志)。
+
+## 快速开始
+
+### 仿真（远程 Docker 内）
+```bash
+export XROBO_GRIP_THRESHOLD=0.2
+python scripts/simulation/teleop_rm65_sim.py
+```
+
+仿真默认从 `[0, 0, -60, 0, 60, 0]`（度）启动，B 键回到该姿态；可用 `--home-joint-deg` 覆盖。该姿态的数值奇异度已核对，但真实侧装净空与碰撞路径仍须现场确认。官方将 `[0,0,0,0,0,0]` 列为边界奇异示意点；详见 [RM65 参数与坐标系语义](docs/RM65参数与坐标系.md)。
+
+默认 `--ik-backend placo` 保留原仿真行为。若容器已安装睿尔曼 API2 Python SDK，可使用历史官方连续 IK 仿真（与新默认 DLS 真机路径不同）：
+
+```bash
+python scripts/simulation/teleop_rm65_sim.py \
+  --home-joint-deg J1 J2 J3 J4 J5 J6 \
+  --ik-backend official
+```
+
+官方模式以官方 FK 计算 Grip 锚点，以当前仿真关节作为 `rm_algo_ik_remote` seed，再把输出关节角写入 URDF/Meshcat 显示；Placo 不参与关节求解。该模式会拒绝 J3 进入默认 ±5° 排除区以及超过 RM65-B 10% 型号速度的单周期关节跳变。它用于算法链验证，不证明 URDF 末端显示位置与控制器 TCP 坐标一致。
+
+需要与真机走同一控制判据时，先只读采集当前控制器 DH/工具帧：`python scripts/tools/fetch_rm65_dls_calibration.py`，再用 `python teleop.py --mode sim --sim-ik-backend shared-dls --home-joint-deg J1 J2 J3 J4 J5 J6`。此后端只仿真命令与反馈，不模拟真实执行动态；见[仿真操作手册](docs/仿真操作手册.md)。
+
+### 真机
+
+推荐入口默认使用 `damped_ik_movej_follow`：独立 UDP 反馈、笛卡尔限速、奇异区域降速、阻尼 IK 和受限关节目标跟随。运行容器需要睿尔曼 API2 SDK，并核对工作/工具帧配置；详见[真机安全与故障处理](docs/真机安全与故障处理.md)。先确认机械臂实时推送已指向运行本程序的主机 UDP `8089`，并包含 `joint_status`、`waypoint` 和错误信息。
+
+```bash
+# 0. 只读监视六轴角与奇异点余量（占用 UDP 8089，先停掉其他接收程序）
+python scripts/hardware/read_arm_state.py
+
+# 1. 只读 TCP 预检（不发送运动指令）
+python scripts/hardware/preflight_realman_rm65.py --arm-host 192.168.10.18 --arm-port 8080
+
+# 2. 安全链路 dry-run：检查 XR / UDP / 型号 / 时序，不发送轨迹目标
+python scripts/hardware/teleop_realman_rm65_safe_hardware.py --arm-host 192.168.10.18 --dry-run
+
+# 3. 现场确认净空与急停后，显式收紧至 3 cm 做首次运动验收
+python scripts/hardware/teleop_realman_rm65_safe_hardware.py --arm-host 192.168.10.18 --max-offset-m 0.03
+```
+
+真机默认以同一组六轴角度为 Home。若启动时实测关节与它的偏差超过 `1°`，控制器会打印偏差量和目标角度，留 `3 s` 缓冲（期间可 `Ctrl+C` 或拍急停中止）后自动低速回位，**不再要求输入确认口令**；需要恢复旧口令门（输入 `HOME 0 0 -60 0 60 0` 才回位）加 `--home-start-confirmation`，取消缓冲加 `--home-start-delay-s 0`。B 键随后也返回该关节姿态，并核对 UDP 六轴反馈。回位路径预检默认**关闭**：起点在 J3/J5 零位另一侧时回位改为关节空间插值直发，穿越零位/奇异硬区只打印 `[HOME] 注意：…` 提示；加 `--enable-home-path-preflight` 可恢复拒绝式预检。
+
+默认 `move_v=5`、TCP 线速度上限 `0.05 m/s`、角速度上限 `0.25 rad/s`；默认幅度为平移比例 `--scale-factor 1.0`、旋转比例 `--rotation-scale-factor 0.25`、旋转包络 `--max-rot-offset-rad 0.20`（约 11.5°），平移死区默认为 0。**单次 Grip 平移包络入口默认不设限**（`--max-offset-m` 默认 `None`，控制器库默认仍为 `0.15`）：手柄位移 1:1 直接进目标，一段 Grip 内仍受 TCP 工作空间盒（每轴 `±1.0 m`，上机前应按现场收窄）、XR 单帧跳变门槛、关节限位/超速与跟随余量限制；失去的是单段**累计漂移**上限。首次真机验收用命令行显式收紧行程（`--max-offset-m 0.03`）；关节速度超过 RM65-B 型号上限的 10% 时立即硬停止并锁存。故障后松开 Grip，待六轴静止且反馈正常即重新使能；若故障时 Grip 已松开，需先扣住再松开一次。B 键只用于回固定 Home；正常松开 Grip 使用软停止。首次上机仍必须保证安全初始姿态、净空、急停可触达并有现场监护，自动化测试不能替代真机验收。
+
+奇异点保护默认开启，并实际发送 DLS 算出的受限关节目标。危险区阻止继续深入，满足关节限位、局部路径及反馈约束的退出方向可低速通过。`[DLS] hold_*` 请求软停止并等待实测静止；单纯 HOLD 不需要重新使能，停止失败或其他安全错误仍会锁存。正常 B 回位与自检也经过同一检查，但回位预检关闭时 B 回位走关节空间插值直发、不经过 DLS 奇异守卫（逐周期的反馈新鲜度、跟踪误差、关节限位/超速检查仍在）。它不保证任意姿态都能退出，不提供自动换肘或绕路。实现与验证记录见 [真机安全与故障处理](docs/真机安全与故障处理.md)。
+
+历史可选的官方连续 IK 模式使用 `rm_algo_ik_remote` + `movej_follow`，不提供上述 DLS 保护，必须显式关闭奇异保护开关。该模式保留原先的启动 TCP 复位语义，不会自动回固定六轴 Home；需要固定关节 Home 时使用默认 DLS 模式。它要求容器已按睿尔曼官方方式安装 API2 Python SDK，并且现场已核对当前工作/工具坐标系、设置 RM65 J3 非零软限位。先运行 dry-run；该模式下 dry-run 会执行 IK 和关节步长检查，但不会发送运动目标：
+
+```bash
+python scripts/hardware/teleop_realman_rm65_safe_hardware.py \
+  --arm-host 192.168.10.18 \
+  --motion-command official_ik_movej_follow \
+  --no-enable-singularity-avoidance \
+  --official-ik-tool-or-work 1 \
+  --official-ik-frames-verified \
+  --official-ik-j3-soft-limit-verified \
+  --dry-run
+```
+
+上述两个 `verified` 开关是 fail-closed 门槛，不代表程序自动完成了坐标系标定或软限位配置。未安装 SDK、IK 失败、解超关节限位或单周期关节步长超限时，程序会拒绝启动或锁存停止。
+
+`teleop_realman_rm65_placo_hardware.py` 保留为兼容入口，参数与上述新入口一致。
+
+旧入口 `teleop_realman_rm65_hardware.py` 的真机运动已禁用，只保留 `--dry-run` 映射诊断，避免绕开上述保护。
+
+### Meshcat 可视化（本地）
+```bash
+bash scripts/tools/start_meshcat_viewer.sh
+```
+
+### 一键启动（推荐 🚀）
+一条命令完成代码同步、模式选择、SSH 隧道和脚本启动：
+
+```bash
+# 交互菜单
+python teleop.py
+
+# 直接启动仿真
+python teleop.py --mode sim
+
+# 一键启动官方 IK 仿真
+python teleop.py --mode sim --sim-ik-backend official --home-joint-deg J1 J2 J3 J4 J5 J6
+
+# 共用真机控制链的仿真（先采集控制器快照）
+python teleop.py --mode sim --sim-ik-backend shared-dls --home-joint-deg J1 J2 J3 J4 J5 J6
+
+# 真机检查：连接和计算目标，但不运动
+python teleop.py --mode hardware-dry-run
+
+# 直接启动真机
+python teleop.py --mode hardware
+
+# 仅同步代码（手动调试用）
+python teleop.py --mode sync-only
+```
+
+## 依赖
+
+### 宿主机（Windows）
+一键脚本 `teleop.py` 使用 Python 标准库，无需额外安装。需要确保：
+- `ssh` 可用，且安装了 `rsync` 或 `scp`（Windows OpenSSH 即提供 `scp`）
+- 已配置 SSH 免密登录到远程板（`ssh rm@192.168.0.115`）
+
+### 容器内（Docker）
+`pyproject.toml` 包含 `placo`, `meshcat`, `numpy`, `tyro`, `h5py` 和官方 `Robotic_Arm`；`xrobotoolkit_sdk` 仍由 Docker 安装脚本提供。默认 DLS 模式（包括 Dry Run）需要官方 FK，可选官方 IK 模式也需要此 SDK。[官方安装说明](https://develop.realman-robotics.com/robot/apipython/getStarted/)。
+
+旧容器只同步源码不会自动安装新增依赖。出现 `No module named 'Robotic_Arm'` 时，在 Windows PowerShell 执行：
+
+```powershell
+ssh rm@192.168.0.115 "sudo docker exec xrobo-vr-teleop python -m pip install Robotic_Arm"
+```
+
+使用 `python -m pip`，确保装入 `teleop.py` 实际调用的容器 Python，而不是 Windows 的 `(base)` 环境。`docker exec` 不会继承入口进程运行时的 `conda activate`；若手动切换解释器，安装和启动必须使用同一个解释器。新版 Dockerfile 已将 `xrobo/bin` 放到 PATH 首位（重建镜像后生效）。本次在现有 `/opt/conda/bin/python`（3.13）中验证了 `Robotic_Arm 1.1.6` 的离线 FK，真机仍须核对控制器版本和工作/工具帧。
+
+如需在容器内手动安装依赖，建议使用清华镜像源加速：
+```bash
+pip install <包名> -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+### DLS 启动参数与帧一致性
+
+默认真机 DLS（含 Dry Run）启动时只读获取实际 DH 和当前工具参数，用于本地官方 FK。显式 `--dls-flange-to-tcp` 优先；`--dls-work-from-base` 保持显式配置，不按当前姿态自动拟合。读取失败、SDK 读回不一致或 FK/UDP 偏差超过 5 mm / 2° 时拒绝启动。
+
+现场 RM65-BI 的 d6=161.2 mm，区别于标准 SDK 默认的 144 mm；finger 工具也不是单位变换。详见 [真机安全与故障处理](docs/真机安全与故障处理.md) §1.1 与 [决策与结论汇总](docs/决策与结论汇总.md) §2.10。停止其他 UDP 8089 接收程序后，可运行不启动 XR、不发送运动命令的复验：
+
+```powershell
+ssh rm@192.168.0.115 "sudo docker exec -w /workspace xrobo-vr-teleop python scripts/hardware/check_realman_dls_frames.py"
+```
+
+2026-09-23 的目标容器 1000 周期 Dry Run 中，完整 `_send_motion` 安全准入链 median `10.169 ms`、P95 `11.782 ms`、max `14.397 ms`，满足 `18 ms` DLS 准入预算与 `20 ms` 控制周期；测试姿态位于奇异减速区（`ratio=0.03189`、`scale=0.730`）。这只证明当前 RM65-BI、实际 DH、`finger` 工具帧和 14-FK 路径下的**计算与准入时序**，不代表真实 `movej_follow` 发送、XR 主循环、机械臂跟踪、方向手感或物理安全已经验收。
+
+## 项目结构
+
+完整目录与文件职责见 [仓库结构](docs/仓库结构.md)，脚本用途见 [脚本索引](scripts/README.md)。
+
+```text
+vr-teleop-rm65/
+├── README.md                 # 本文件：快速开始、依赖、目录说明
+├── AGENTS.md                 # 指向 CLAUDE.md 的项目规范入口
+├── CLAUDE.md                 # 项目规范、架构与安全注意事项
+├── pyproject.toml            # 依赖、打包与 pytest/black 配置
+├── teleop.py                 # 本地统一启动器：仿真 / Dry Run / 真机 / 同步
+├── xrobotoolkit_teleop/       # 核心库（控制器、XR 客户端、协议层）
+│   ├── common/               #   抽象基类、XR 客户端
+│   ├── simulation/           #   Placo / 官方 IK / shared-dls + Meshcat 仿真
+│   ├── hardware/             #   真机控制器、共享控制核心、协议与实验记录
+│   │   ├── interface/        #     TCP/JSON 协议
+│   │   └── legacy/           #     历史实现与兼容入口
+│   └── utils/                #   几何运算、Meshcat 工具
+├── scripts/
+│   ├── README.md             # 按用途查找入口与工具
+│   ├── simulation/           # 仿真入口
+│   ├── hardware/             # 真机入口、只读预检与状态监视
+│   ├── tools/                # 安装、验证、Viewer、标定与文档生成工具
+│   └── debug/                # 调试与离线复算脚本
+├── assets/realman/           # RM65 URDF 模型（官方 + SW 导出）
+├── config/                   # 参数参考 JSON；shared-dls 另读取控制器标定快照
+├── docker/                   # Docker 构建文件
+├── docs/                     # 核心文档、真机实验记录说明与仓库导航
+│   ├── logs/                 # 按日期命名的工作日志与改动路线总览
+│   ├── data/                 # 随仓库保留的离线数据快照
+│   ├── research/             # 研究报告、导师版方案与 drafts/ 原始草稿
+│   ├── plans/                # 设计提案（状态以文档和日志为准）
+│   └── archive/              # 历史文档原文，不作为当前操作说明
+├── tests/                    # 单元测试（conftest.py 把临时目录钉在 build/tmp）
+└── build/                    # 本机产物，整体被 Git 忽略
+    ├── archive/              # 整理备份、旧基线、探针草稿与迁移清单
+    ├── cache/                # pytest 缓存
+    ├── experiments/          # 自动实验记录，含假硬件数据，证据等级看各会话元数据
+    ├── validation/           # 本机验证报告与基准结果
+    ├── demos/                # 交互演示
+    ├── group-meeting/        # 组会材料
+    ├── acl-recovery/         # 本机环境诊断记录
+    └── tmp/                  # 运行期临时目录
+```
+
+**目录约定**：源码、模型、配置和维护文档各留在上述目录；实验记录、报告、缓存、临时文件与整理备份集中到 `build/`。需要随仓库保存的离线快照放 `docs/data/`，日期工作日志放 `docs/logs/`。pytest 缓存已固定为 `build/cache/pytest/`；Python 自动生成的 `__pycache__/` 由忽略规则兜底，验证时使用 `python -B -m pytest` 可避免生成字节码缓存。2026-10-03 的原文、Git 差异、迁移清单和核对结果保存在 `build/archive/repository-organization-2026-10-03/`。
+
+除上面这些，文件树里还会看到 `build/` 和几个点开头的目录，它们都不属于项目内容：
+
+| 目录 | 是什么 | 是否入库 |
+| --- | --- | --- |
+| `build/` | 实验记录、验证报告、演示、缓存与历史备份；有研究价值的内容须自行备份 | 忽略 |
+| `.agents/` | 项目自带的 AI skill（`rm65-real-robot-ik`） | **入库** |
+| `.codex/`、`.vscode/` | 本机 AI 工具与编辑器配置 | 忽略 |
+
+## 不含
+- 多机器人（UR5 等）相关代码
+- Placo IK 真机路径（真机默认官方 FK + DLS + 受限 `movej_follow`，详见奇异区域保护说明）
+- 其它机型的 URDF/mesh：`assets/realman/` 只放 RM65 的两个变体，且 14 个 STL 已随仓库入库（无需另找）
+
+## 历史代码与生成物
+
+历史控制器和单文件诊断实现集中在 `xrobotoolkit_teleop/hardware/legacy/`，旧导入路径与旧命令保留兼容包装。详见 [项目交接](docs/项目交接.md) §6.1。
+
+`config/realman_rm65_side_mount_teleop.json` 是参考快照；修改它不会改变运行参数。当前代码默认 `invert_tcp_xy=False`，应通过 CLI 显式传参。
+
+`config/rm65_dls_calibration.json` 是另一类文件：它保存控制器 DH/工具帧，由 `shared-dls` 显式读取，且被 Git 忽略。不要将两类快照的加载行为混淆。
+
+研究报告统一放在 `docs/research/`，原始分题草稿放在其 `drafts/` 下；导师版 Word 的生成脚本放在 `scripts/tools/make_advisor_docx.py`，输出仍为原研究目录中的同名文件。测试报告、缓存与打包产物通过 `.gitignore` 排除；`build/archive/` 存整理备份，`build/tmp/` 存运行期临时文件。2026-10-03 已将源码目录中的 12 个字节码缓存目录及根目录 pytest 缓存迁入整理备份，原内容保留。

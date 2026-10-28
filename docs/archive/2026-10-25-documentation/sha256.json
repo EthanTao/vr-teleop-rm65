@@ -1,0 +1,34 @@
+{
+  "README.md": {
+    "sha256": "ce663519ecaafcf6fbef0a5e0f1a2f3470f0fd77d2e01822225b64a2101d921e",
+    "bytes": 16753
+  },
+  "CLAUDE.md": {
+    "sha256": "56176a6333ebed28f81629b1fdb3b0f2be8c50ed5cdd3cbc8420e31bb9f5de7f",
+    "bytes": 18515
+  },
+  "docs/README.md": {
+    "sha256": "13e0ab6cd046b2dacd177d4841e3b970e55ae33542230863c25608504e7aa0c4",
+    "bytes": 8739
+  },
+  "docs/项目交接.md": {
+    "sha256": "5ec9abab1247da724d36af27d5633b49fc2d4995ae888720346b6c05f030dc79",
+    "bytes": 27892
+  },
+  "docs/仿真操作手册.md": {
+    "sha256": "0674b5741ee6c9990ee74c82b879a1b60f2453e139227aae7fbe9ef407b02948",
+    "bytes": 13337
+  },
+  "docs/真机安全与故障处理.md": {
+    "sha256": "1f3def2ff505b058a2d415a8c90434bc3bcb83751bb127716b2d65f9fae838cc",
+    "bytes": 37247
+  },
+  "docs/决策与结论汇总.md": {
+    "sha256": "e919a75ba3c240ceceaac9fde5669d8842e81f6d6721ba9bf38c2a52ff72b13b",
+    "bytes": 37678
+  },
+  "docs/仓库结构.md": {
+    "sha256": "e9ac308c84ad68b32d96c80c718f0cb5e9e273ae28e5041ad99d16bee7f280a4",
+    "bytes": 13810
+  }
+}

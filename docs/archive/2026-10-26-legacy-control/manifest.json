@@ -1,0 +1,670 @@
+{
+  "date": "2026-10-26",
+  "purpose": "Retired pre-MoveIt control stack; archive current dirty file bytes",
+  "archive": "source.tar.gz",
+  "archive_sha256": "76a46db99ba215a654bd5b153439ff165617d5fbc87464c66373394703c7e6d6",
+  "file_count": 131,
+  "uncompressed_bytes": 4527866,
+  "excludes": [
+    "Python caches",
+    "config/rm65_dls_calibration.json (preserved locally)",
+    "experiments and research materials"
+  ],
+  "files": [
+    {
+      "path": "assets/realman/RM65-B/meshes/base_link.STL",
+      "bytes": 368984,
+      "sha256": "a99f73338c90276cd7a90573714300c4a1383c5514d3a5e0671fb60b440ac5d4"
+    },
+    {
+      "path": "assets/realman/RM65-B/meshes/link_1.STL",
+      "bytes": 189684,
+      "sha256": "008894df7deb20d9aec98b4dbc3ac8e12dbc31b90e6a8485542140eb0ab3ded5"
+    },
+    {
+      "path": "assets/realman/RM65-B/meshes/link_2.STL",
+      "bytes": 368484,
+      "sha256": "d3a46b4b619bfd28d8948d5335f8bd62284ea0742ec4fb2b7ac5e5ab858d67f8"
+    },
+    {
+      "path": "assets/realman/RM65-B/meshes/link_3.STL",
+      "bytes": 185784,
+      "sha256": "5d903745e9369009ac064bc24c080d03f503b3386b8e14325a318cf8fde0959d"
+    },
+    {
+      "path": "assets/realman/RM65-B/meshes/link_4.STL",
+      "bytes": 184184,
+      "sha256": "2fc93b2bc970eadca950afa3120129766e2bead60234c6d8752d3b223e407046"
+    },
+    {
+      "path": "assets/realman/RM65-B/meshes/link_5.STL",
+      "bytes": 195784,
+      "sha256": "f9d0216056f7e1512858033163b0415973e1db573a1fee5af1609171967c043f"
+    },
+    {
+      "path": "assets/realman/RM65-B/meshes/link_6.STL",
+      "bytes": 171684,
+      "sha256": "a491f4471cf587b0a64c9c25424fd2b096b14f0028b67d0909233bf6f6a947df"
+    },
+    {
+      "path": "assets/realman/RM65-B/urdf/RM65-B.urdf",
+      "bytes": 7943,
+      "sha256": "91809d21010ce95dbe39b6bfcf709d1218aa3cc094064a38c80356dcd3f26933"
+    },
+    {
+      "path": "assets/realman/RM65-official/meshes/arm_base_link1.STL",
+      "bytes": 415184,
+      "sha256": "e38c1d7986e9a514fdcf63562a83aa875694499c42b53b460a7c121698af9025"
+    },
+    {
+      "path": "assets/realman/RM65-official/meshes/r_link1.STL",
+      "bytes": 189384,
+      "sha256": "97a4414e0015d4296967f3f6f994ccd7ef65bfb3bea3722933fe0158c3b50fd3"
+    },
+    {
+      "path": "assets/realman/RM65-official/meshes/r_link2.STL",
+      "bytes": 373184,
+      "sha256": "bb156ef3002836415891ae4431abe15f21678f5b416f1cd167033bde64b49e9c"
+    },
+    {
+      "path": "assets/realman/RM65-official/meshes/r_link3.STL",
+      "bytes": 179884,
+      "sha256": "505c3b32436a6e7be055896c98c4113b29f657d418b310da5126599ba91a14a9"
+    },
+    {
+      "path": "assets/realman/RM65-official/meshes/r_link4.STL",
+      "bytes": 184084,
+      "sha256": "f4eb11589de15cc95470fd383476a331fa2a0ab031d7fab18665ad9416a0828b"
+    },
+    {
+      "path": "assets/realman/RM65-official/meshes/r_link5.STL",
+      "bytes": 194584,
+      "sha256": "9b370c47af43d06dd190f76cb236bd09860440f921da3c6bdfb33224ce2a4591"
+    },
+    {
+      "path": "assets/realman/RM65-official/meshes/r_link6.STL",
+      "bytes": 355784,
+      "sha256": "90fdf79f8b0b974c4f118021a03b9f521e9d83e9063cb65f90e852757b88f60c"
+    },
+    {
+      "path": "assets/realman/RM65-official/urdf/RM65-official-arm.urdf",
+      "bytes": 2746,
+      "sha256": "2b02c0bbb0edce21e661d116532bfa4f494ac837d34d31a29233e3d1cc7b8887"
+    },
+    {
+      "path": "config/realman_rm65_side_mount_teleop.json",
+      "bytes": 4193,
+      "sha256": "b11b69e4716a416d5a4cf114906b1b761c94a612678013566bb3a5ecfa642fa1"
+    },
+    {
+      "path": "docker/docker-compose.yml",
+      "bytes": 1781,
+      "sha256": "cb46a8fd871210fdc5c0ba1ea85f703dc945b4b17bac3ccccf44686e576bbafa"
+    },
+    {
+      "path": "docker/Dockerfile",
+      "bytes": 2075,
+      "sha256": "62a874b47a11a86882966190b55d17cd97d21dcb43ae0be4caaebad616205cf3"
+    },
+    {
+      "path": "docker/entrypoint.sh",
+      "bytes": 1783,
+      "sha256": "939a5229372bbc51b82f939f3c70785301a458f3e12947bc3316818d28330350"
+    },
+    {
+      "path": "docker/install_sdk.sh",
+      "bytes": 1875,
+      "sha256": "181dfa5e82b6fd594924949e7fb99fbdf56bff4ce01bb34dbad114a6a3475770"
+    },
+    {
+      "path": "docker/run.sh",
+      "bytes": 558,
+      "sha256": "79602cf41f58ccfd96786c1c1370043ef3a645bf0348dff9aae43754e23572c3"
+    },
+    {
+      "path": "scripts/debug/analyze_home_singularity.py",
+      "bytes": 6429,
+      "sha256": "5ba82ff2053be945fe064c800ff522f06f69ad721d3d58da56ef938df3de0ab6"
+    },
+    {
+      "path": "scripts/debug/analyze_motion_log.py",
+      "bytes": 1012,
+      "sha256": "6495dc9360c7fa73aecd4b01a18cc316c4557ec292ad0ef6a3a635471203b978"
+    },
+    {
+      "path": "scripts/debug/analyze_real_home_reach.py",
+      "bytes": 11508,
+      "sha256": "2fb6c6a31e6ab023b0aae18672c04f520fb36d260ee1d0b714e1b007b0199142"
+    },
+    {
+      "path": "scripts/debug/bench_adapter_overhead.py",
+      "bytes": 4499,
+      "sha256": "e23549cd00bcd763504209fb0612b8852ced001fdd7d081ee4aeef63025357ed"
+    },
+    {
+      "path": "scripts/debug/check_batch_forward_equivalence.py",
+      "bytes": 3731,
+      "sha256": "e3a29f84f85ee332726b7970a233aca01ed4f72af7067f8fe6ee48c77567848b"
+    },
+    {
+      "path": "scripts/debug/check_limits.py",
+      "bytes": 500,
+      "sha256": "6ac23c815fa5895bf57199b5b00f27f92a4792330186c3f7f259c920d424fc63"
+    },
+    {
+      "path": "scripts/debug/check_path_cache.py",
+      "bytes": 3332,
+      "sha256": "30763bd011115f954b255c8a3e82562d36a697cc49fb673dd5483de2afb524e6"
+    },
+    {
+      "path": "scripts/debug/check_quaternion_equivalence.py",
+      "bytes": 8965,
+      "sha256": "5d6cf0927cab828cb9af38b3636932ecf94c79b09967546cf00a2bb9b73a3abe"
+    },
+    {
+      "path": "scripts/debug/count_dls_fk_calls.py",
+      "bytes": 3106,
+      "sha256": "18e632cdfe3501795457667d0021308557628154a00a760cfccb89efab546df1"
+    },
+    {
+      "path": "scripts/debug/count_dls_fk_calls_by_outcome.py",
+      "bytes": 4563,
+      "sha256": "ea8149e033e29333d6289401067313b55ab1c2b39a9b7524641a46851e6ba007"
+    },
+    {
+      "path": "scripts/debug/count_dls_numpy_ops.py",
+      "bytes": 6961,
+      "sha256": "e1aaf592873002c5857be701d66aa0f9c919a789458d2b3ec58da8801cab434a"
+    },
+    {
+      "path": "scripts/debug/derive_compose_semantics.py",
+      "bytes": 4463,
+      "sha256": "b9f279689b6ec2c3d2ec9101e510f1609ebef8394fcd221d1d298f99e879d4d1"
+    },
+    {
+      "path": "scripts/debug/derive_frame_batch.py",
+      "bytes": 5296,
+      "sha256": "26b469e71a8203a146dd7be1095521be48a1da4330deef1b91ff5d290724710f"
+    },
+    {
+      "path": "scripts/debug/diagnose_placo_motion.py",
+      "bytes": 3300,
+      "sha256": "595966cfff0482becf0840ba2993f8e544b8de57ed6312e3136aa91ac82df37b"
+    },
+    {
+      "path": "scripts/debug/dump_udp_frame.py",
+      "bytes": 7769,
+      "sha256": "cac520569da680af1de8e15ba132204a4a6eba93239c3fc157ae258b30637589"
+    },
+    {
+      "path": "scripts/debug/estimate_teleop_mapping.py",
+      "bytes": 944,
+      "sha256": "ee25306409c1b2d786886e07293ae2b069bddce660c590d225ea1aa8937240c2"
+    },
+    {
+      "path": "scripts/debug/remote_check.py",
+      "bytes": 1478,
+      "sha256": "1cffc88a3b06b56570786ccb66ecbe339bc108569b96d925e7d890c3ae689ff9"
+    },
+    {
+      "path": "scripts/debug/report_singularity_free_tcp.py",
+      "bytes": 2338,
+      "sha256": "d23a3def26ffdc2f38263f8ba3c9e064996336737678896053083ce19b4f40fe"
+    },
+    {
+      "path": "scripts/debug/report_teleop_acceptance.py",
+      "bytes": 1105,
+      "sha256": "b2c61bd9e3caa52f6994c64ba916320b9231f736ff2f7a681d892306a520b8bd"
+    },
+    {
+      "path": "scripts/debug/scan_singularity_free_tcp.py",
+      "bytes": 29967,
+      "sha256": "9f22286e34202495942f1c46da5e5c71f47ce58083b5b4f20898d070d9049d87"
+    },
+    {
+      "path": "scripts/debug/test_fix.py",
+      "bytes": 380,
+      "sha256": "8852512bc71d31e0914943b3f40861fa7fd82d2b554f9c49daeac4328a11119c"
+    },
+    {
+      "path": "scripts/debug/test_meshcat.py",
+      "bytes": 1377,
+      "sha256": "40f2db21819aae9207a3b875ab781665ee1b536cdd12b2ae30e45a29c8d22239"
+    },
+    {
+      "path": "scripts/debug/test_robot_viz.py",
+      "bytes": 1362,
+      "sha256": "f2b10aa55fe273fd3978b987ecba6714d37fb852536f763a19614896c21c0fa3"
+    },
+    {
+      "path": "scripts/hardware/benchmark_dls_cycle.py",
+      "bytes": 29865,
+      "sha256": "fdc24b56683c04027338ecce62bbe38b328d8d67c7af9545abec39d4e22fed38"
+    },
+    {
+      "path": "scripts/hardware/check_realman_dls_frames.py",
+      "bytes": 2643,
+      "sha256": "7e52b36222043222ad459bc11527429f68d4b38f9896f1bca3c165f976af41b8"
+    },
+    {
+      "path": "scripts/hardware/preflight_realman_rm65.py",
+      "bytes": 4684,
+      "sha256": "125e90a65aae3f66288725a0193425ca8ffd45668bbddf67290be55a766376df"
+    },
+    {
+      "path": "scripts/hardware/read_arm_state.py",
+      "bytes": 1750,
+      "sha256": "bc9285a0d26b86dd8a5e07d04d457a5a8ef6d072f0c11670af0e3d33aa517b3b"
+    },
+    {
+      "path": "scripts/hardware/teleop_realman_rm65_hardware.py",
+      "bytes": 362,
+      "sha256": "45fbb16233affc3ed8239e9648ef914808dfc4b142215e82706acbf6f08832bb"
+    },
+    {
+      "path": "scripts/hardware/teleop_realman_rm65_placo_hardware.py",
+      "bytes": 322,
+      "sha256": "4148b51ba077ab281700208d21bde8c2223bf2378c82159fab21820fd243b404"
+    },
+    {
+      "path": "scripts/hardware/teleop_realman_rm65_safe_hardware.py",
+      "bytes": 14739,
+      "sha256": "ac70c8a515c33107b6194ef57efc939c538fc3096d8b2694908c72f3adf5c680"
+    },
+    {
+      "path": "scripts/hardware/validate_realman_rm65_urdf.py",
+      "bytes": 5884,
+      "sha256": "f6ab299776f90a8912b0b69e071aae3137d9f64ae080e6bd221985ca1ed44f9f"
+    },
+    {
+      "path": "scripts/simulation/capture_rm65_calibration.py",
+      "bytes": 2571,
+      "sha256": "2bf84ddb8c559b4b4862a80817dd6e8009a4dbba29f75fc07e04752b00ca812b"
+    },
+    {
+      "path": "scripts/simulation/teleop_rm65_sim.py",
+      "bytes": 8120,
+      "sha256": "06e44235c1871acbd8cea66397ecdcfe03b20cb72e624651d39768bdbb8f0cc5"
+    },
+    {
+      "path": "scripts/tools/fetch_rm65_dls_calibration.py",
+      "bytes": 2535,
+      "sha256": "b8b719cf0a3a14c391a8475751bd26ab279239f761bb567461b1218f9d2456ce"
+    },
+    {
+      "path": "scripts/tools/install_deps.py",
+      "bytes": 585,
+      "sha256": "f02a8f975c8953679543d065757ec52a65003e778648661e121e7cf268bbc5b5"
+    },
+    {
+      "path": "scripts/tools/install_h5py.sh",
+      "bytes": 201,
+      "sha256": "2fa369eb4cf667abaec2d34e420369c3edec329623d0b578c1cc8bd2dbc36b7d"
+    },
+    {
+      "path": "scripts/tools/run_validation.py",
+      "bytes": 1446,
+      "sha256": "58589171b9084da01b4a1dfaf5423a4d84d599b629d8186ddc7cf5c6f7af1bee"
+    },
+    {
+      "path": "scripts/tools/run_validation.sh",
+      "bytes": 1432,
+      "sha256": "269dd2a61a58cf58d98c58139b01f686df8ec3bc313adcac6123c45a376b204e"
+    },
+    {
+      "path": "scripts/tools/start_meshcat_viewer.bat",
+      "bytes": 1992,
+      "sha256": "e88373a51fd18524db9453994853e708bbfe2681c50cb19fba0c75cd2bc417ff"
+    },
+    {
+      "path": "scripts/tools/start_meshcat_viewer.sh",
+      "bytes": 882,
+      "sha256": "b204cdd404c807259d7f46a4f63cb127c49f1fd0d281729b43b9736e3f36ef80"
+    },
+    {
+      "path": "tests/__init__.py",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "tests/conftest.py",
+      "bytes": 2409,
+      "sha256": "59583b4e93c0e822ea49e8d64408edb3ee1f7391cfdfc8a42bb4624f6fc16cae"
+    },
+    {
+      "path": "tests/test_acceptance_criteria.py",
+      "bytes": 12340,
+      "sha256": "0d31b6aecb038fcf11e00f938db6f0e623380e27a121b8c0d5de961aefe44c94"
+    },
+    {
+      "path": "tests/test_cartesian_command_limiter.py",
+      "bytes": 12672,
+      "sha256": "67bb50d45674eafa05db317f09b0600863bb3d57ddf3c6b73325d1c6baadd84c"
+    },
+    {
+      "path": "tests/test_code_fingerprint.py",
+      "bytes": 3091,
+      "sha256": "767686801f7452c1e8c6568e1999f7f89d44b88ac6a288fd868d4318e9c49cf9"
+    },
+    {
+      "path": "tests/test_control_timing.py",
+      "bytes": 839,
+      "sha256": "04c1897d3d25b113131198a2c09eb53a4dd5519ce916815ea68ab1832b1b52d1"
+    },
+    {
+      "path": "tests/test_damped_ik.py",
+      "bytes": 62381,
+      "sha256": "f7652000dab1276c1f09b3fa786d1403d807f43671d77f524453cd760b9fae8d"
+    },
+    {
+      "path": "tests/test_data_collector.py",
+      "bytes": 2694,
+      "sha256": "cfee424f842e9ce95229634192336f460d388c7c5d45b0485cfea030c3fec670"
+    },
+    {
+      "path": "tests/test_experiment_recording.py",
+      "bytes": 15852,
+      "sha256": "1204abfed4021679d0f4288bd95ae349d3db3a0b4e5afc5a6f33fc519b49ecff"
+    },
+    {
+      "path": "tests/test_joint_constraints.py",
+      "bytes": 4723,
+      "sha256": "03b2e754cd943169ddaa0fd0459cd4854f4817ec3249b7c3ab75d97e8289035c"
+    },
+    {
+      "path": "tests/test_mapping_estimation.py",
+      "bytes": 8114,
+      "sha256": "0fad9a8fbc8be9d0b37aea60d2fc98d45881ab612cc047459c0742331a1dd562"
+    },
+    {
+      "path": "tests/test_motion_diagnostics.py",
+      "bytes": 10331,
+      "sha256": "092c5aa93468b2383936a85c51b9182d03699cf4151eafd4c471a7e3d54fa2f7"
+    },
+    {
+      "path": "tests/test_motion_diagnostics_failures.py",
+      "bytes": 5170,
+      "sha256": "23e72ac2ee09d384854195657ea1b21f43325f0214a0414c2d28df37606787c1"
+    },
+    {
+      "path": "tests/test_motion_filter.py",
+      "bytes": 4052,
+      "sha256": "1a36e7dad8aa4beba7f5f7408164727c6002076cc62cf8afe151bcce97ac875e"
+    },
+    {
+      "path": "tests/test_motion_log_analysis.py",
+      "bytes": 9984,
+      "sha256": "f325e952ffda7e26a98dd1f167f65b4bf0ce9dc56e57b38c2a4a2f1bcbaf3ba2"
+    },
+    {
+      "path": "tests/test_parallel_gripper_utils.py",
+      "bytes": 605,
+      "sha256": "eb2b6a30c1728ffb0b253455b124a6a0e933f7e0abff3425ad8de9d7741f6062"
+    },
+    {
+      "path": "tests/test_realman_ik_continuity.py",
+      "bytes": 11719,
+      "sha256": "d09ddac7fc9f390eaeb3d309b5d17901bd5a07662306b913d84f8480f80d572d"
+    },
+    {
+      "path": "tests/test_realman_mapping.py",
+      "bytes": 11115,
+      "sha256": "0af2154a311710ccb7a4313532321d731a44d04ba2cee5eca8f5b930b71e6063"
+    },
+    {
+      "path": "tests/test_realman_official_ik.py",
+      "bytes": 7543,
+      "sha256": "12a62638cf01550913e306df1c91d303aa0704af7a9dfbf04a26b9954584f2fb"
+    },
+    {
+      "path": "tests/test_realman_official_ik_simulation_controller.py",
+      "bytes": 6708,
+      "sha256": "d6261d5c8bd7177cdd9cfb83b89e6b8cc31089b51a6cd6b006a55c434bd27eae"
+    },
+    {
+      "path": "tests/test_realman_safe_controller.py",
+      "bytes": 25284,
+      "sha256": "98f868b0ddfcca7435f2e8b13967d7fdb34b18c9cb1d9b4f435f418c5032f32a"
+    },
+    {
+      "path": "tests/test_realman_safety.py",
+      "bytes": 13718,
+      "sha256": "1d37f41ec7b3fc326600e61512e978ee4e28030e6e3fde5837d042578aa4691d"
+    },
+    {
+      "path": "tests/test_realman_udp_feedback.py",
+      "bytes": 14262,
+      "sha256": "5a7a5e92c98249a7528b73d1969a8622d6e5cf3059e90baf1cbaa0c11ce0db47"
+    },
+    {
+      "path": "tests/test_rm65_model.py",
+      "bytes": 4634,
+      "sha256": "f064104d8874628f7f9c821339c4508039fb464089ce6d545f825e9e21f48fee"
+    },
+    {
+      "path": "tests/test_rm65_shared_control_simulation.py",
+      "bytes": 3696,
+      "sha256": "74ecaf8ab67d3eda98568215bfa53663ed5eaaed677733d6f26fa8c187b89dec"
+    },
+    {
+      "path": "tests/test_sim_ik_pipeline.py",
+      "bytes": 9784,
+      "sha256": "fc0b49fdc843bcc660b666772b1ac116e9d87baeafb906272fd81482266f7513"
+    },
+    {
+      "path": "tests/test_singularity_avoidance.py",
+      "bytes": 10825,
+      "sha256": "21a09638a98700e6b3b77f54396d626de69e7592bae125058925de0c70b46a32"
+    },
+    {
+      "path": "tests/test_teleop_input_conditioning.py",
+      "bytes": 3620,
+      "sha256": "497e30c35e2b6e1bdf8990426f119551c9c842d258d29e35206366fb89e54612"
+    },
+    {
+      "path": "tests/test_teleop_launcher.py",
+      "bytes": 16043,
+      "sha256": "f918093dfee2bd81720ede23b83bb10abc2520b485fd8622235064c8551dfdde"
+    },
+    {
+      "path": "xrobotoolkit_teleop/__init__.py",
+      "bytes": 451,
+      "sha256": "f03e8c14e5784b361e0f8334776a03353ae03cacf9b4e91db3dfde8c26b1b46c"
+    },
+    {
+      "path": "xrobotoolkit_teleop/common/__init__.py",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "xrobotoolkit_teleop/common/base_teleop_controller.py",
+      "bytes": 20115,
+      "sha256": "2698af5cc35bbd3fbff29ce9fbe402fb44a991707b6e232fc331f38e0030ccf2"
+    },
+    {
+      "path": "xrobotoolkit_teleop/common/data_collector.py",
+      "bytes": 2919,
+      "sha256": "5729f65e9b36cac903c0c5cfd4cc7639cb7c0e287640611f4f0cc77a30d5ce6e"
+    },
+    {
+      "path": "xrobotoolkit_teleop/common/xr_client.py",
+      "bytes": 6109,
+      "sha256": "26c0198a1cbe56d5db5f532e7372dd78596dcbfd730736c1b3da9ddf896b2094"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/__init__.py",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/cartesian_command_limiter.py",
+      "bytes": 11049,
+      "sha256": "195d600411471b005267c475d13eb16d931fde115e19eea3978a09036f373198"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/control_timing.py",
+      "bytes": 3307,
+      "sha256": "07e8289b382a187a5cdb694fdafb24282b3ab8596d38d2548de0c6c31f7501b8"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/damped_ik.py",
+      "bytes": 28297,
+      "sha256": "aa236cc11b6ec6e2b8668947460ae7414f5d509e268e94e6e4254347b820812f"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/experiment_recording.py",
+      "bytes": 21015,
+      "sha256": "4bfd15ab027155ec6d0f6d6247a77e05e951ed904130cb4a3f55b6e3003f2ec7"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/interface/__init__.py",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/interface/realman_rm65.py",
+      "bytes": 24130,
+      "sha256": "8ca0c777dc2a51b19b0abbd81c9729d0f8b9fafee87086eb25e639b171b5e809"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/legacy/__init__.py",
+      "bytes": 143,
+      "sha256": "ef938a7914d3fc5820acb49123c01de61db43abfc4955b2d554c467704f37bdb"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/legacy/cartesian_teleop_controller.py",
+      "bytes": 19898,
+      "sha256": "60d50c63cace1682c58ed8be0aa14c45644f8745312ef8b12bd835be44f4558d"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/legacy/single_file_teleop.py",
+      "bytes": 21552,
+      "sha256": "c449395c3a756fa2cc34c775d453fe9a2705e560f431b7ac3a0deffeae2321cc"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/motion_diagnostics.py",
+      "bytes": 11412,
+      "sha256": "ea61723eeaf3ce6de3c40e74302a3d28ea897a0dfab911def34a1ac78a3b3637"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/realman_official_ik.py",
+      "bytes": 10105,
+      "sha256": "6f147e3b1c2b5159b344134081b687fd91651f625751866b47484d93b5d126d1"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/realman_rm65_cartesian_teleop_controller.py",
+      "bytes": 372,
+      "sha256": "102dc653296e27367cd05118251c5945c63f5e078a977986e95ecf430e64da78"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/realman_rm65_safe_teleop_controller.py",
+      "bytes": 125860,
+      "sha256": "22eccd4cee70822905e12bbbc659e5cb4df376b84ba409c6c95f4d16661be66e"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/realman_udp_feedback.py",
+      "bytes": 11836,
+      "sha256": "c2bc575b80e5bd9e85ebd403f62c374c5930b3672d1a9bb96f915adeddf56d1c"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/rm65_model.py",
+      "bytes": 5653,
+      "sha256": "ad34324f680357147fd079e8a0dda2cd953f3fdeaf00c4133485308530436923"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/singularity_avoidance.py",
+      "bytes": 23173,
+      "sha256": "5bff057e6500e2b0dfca6bcaf748a7441f53189913b56998832b88420e58333a"
+    },
+    {
+      "path": "xrobotoolkit_teleop/hardware/teleop_input_conditioning.py",
+      "bytes": 2436,
+      "sha256": "0faae376e5bfdd1350a24fcf638b4f3cb3d729bfa4bce73df7c50f499e343c95"
+    },
+    {
+      "path": "xrobotoolkit_teleop/simulation/__init__.py",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "xrobotoolkit_teleop/simulation/ik_pipeline.py",
+      "bytes": 10916,
+      "sha256": "928415981592c2727a86ed9769d2128962c5ec797e9d6191457bca4e71e23f9d"
+    },
+    {
+      "path": "xrobotoolkit_teleop/simulation/joint_constraints.py",
+      "bytes": 4414,
+      "sha256": "6aba42ea54b3afb0a953c9ee237cc006d801368e9e248ec1eb6bda814debf9f8"
+    },
+    {
+      "path": "xrobotoolkit_teleop/simulation/motion_filter.py",
+      "bytes": 2642,
+      "sha256": "34dc560c141a30235ee3f61b027fe44fd723a7b4c588b59c997529dcdc81c507"
+    },
+    {
+      "path": "xrobotoolkit_teleop/simulation/placo_teleop_controller.py",
+      "bytes": 20496,
+      "sha256": "3b5b04ce56daf040f3cc9a491aa80c331a30e642be421001c65c17c3a83132b3"
+    },
+    {
+      "path": "xrobotoolkit_teleop/simulation/realman_official_ik_guard.py",
+      "bytes": 2530,
+      "sha256": "7a9b936fc85d7ca54ccd5ce9f8c6c9388f15057cea2a1743032e1a1bd708126e"
+    },
+    {
+      "path": "xrobotoolkit_teleop/simulation/realman_official_ik_teleop_controller.py",
+      "bytes": 5660,
+      "sha256": "657f435a60668264637e5b7f056330df31d421321e4e30a60fe5d4022a1eccd6"
+    },
+    {
+      "path": "xrobotoolkit_teleop/simulation/rm65_shared_control_simulation.py",
+      "bytes": 6495,
+      "sha256": "b7378302be97288b278912771122b221dcfb9c42fc395731ee596fe2099ed388"
+    },
+    {
+      "path": "xrobotoolkit_teleop/utils/__init__.py",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "xrobotoolkit_teleop/utils/acceptance_criteria.py",
+      "bytes": 12349,
+      "sha256": "74832b7e29c515656aad364a97e0080b4d2bfd8b1975cc47a9ffa9e27a9b3287"
+    },
+    {
+      "path": "xrobotoolkit_teleop/utils/code_fingerprint.py",
+      "bytes": 4492,
+      "sha256": "cd09649c870d9ed73de550db10e043f26366afea8775045603460bcb9e43a043"
+    },
+    {
+      "path": "xrobotoolkit_teleop/utils/geometry.py",
+      "bytes": 5498,
+      "sha256": "1eb4c966d943bcbec42227cbf8f79dede75e36f31197e7a14bed4998d606ec82"
+    },
+    {
+      "path": "xrobotoolkit_teleop/utils/mapping_estimation.py",
+      "bytes": 14304,
+      "sha256": "c5a4a5c318519b98271312ebbadae221af0b73edaab1da1e8f8b6ed9e7251fc5"
+    },
+    {
+      "path": "xrobotoolkit_teleop/utils/meshcat_utils.py",
+      "bytes": 722,
+      "sha256": "7b327360640932ac4d84aab70744013c46ebeecfab4ad4fc2c8a38ad905a2f3f"
+    },
+    {
+      "path": "xrobotoolkit_teleop/utils/motion_log_analysis.py",
+      "bytes": 18540,
+      "sha256": "b3f6a7eb35d77a9580689c6f234cebcd5fda9e13d270ff5db903636406b694c7"
+    },
+    {
+      "path": "xrobotoolkit_teleop/utils/parallel_gripper_utils.py",
+      "bytes": 615,
+      "sha256": "73b5767316c54c4a0df4a37a3b184a7fc4b930379b1363cfa286365994701b37"
+    },
+    {
+      "path": "xrobotoolkit_teleop/utils/path_utils.py",
+      "bytes": 125,
+      "sha256": "4f933f21af62d5b26679154bcf5d5dfed91fac0c2dc7bb005d9fa54d5a1e210f"
+    }
+  ]
+}
