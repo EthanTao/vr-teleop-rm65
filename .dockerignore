@@ -24,4 +24,3 @@ config/
 scripts/
 tests_moveit/
 .agents/
-deliverables/
