@@ -6,9 +6,9 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
-import os
+from pathlib import Path
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "数据集主线方案-给导师-2026.9.24.docx")
+OUT = str(Path(__file__).resolve().parents[2] / "docs" / "research" / "数据集主线方案-给导师-2026.9.24.docx")
 
 doc = Document()
 
