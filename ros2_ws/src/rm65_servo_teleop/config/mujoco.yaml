@@ -1,0 +1,11 @@
+# Simulation assumptions only. These gains/forces are not identified RM65 dynamics.
+timestep_s: 0.001
+# Proximal actuator response is an explicit simulation assumption. The initial
+# low gains severely attenuated 20ms position targets, especially along X.
+# Keep the wrist gains: multiplying all six gains destabilizes the 1ms model.
+# This is not an identified inner servo model or real-robot performance proof.
+position_kp: [19200.0, 19200.0, 16000.0, 400.0, 250.0, 100.0]
+damping_ratio: 1.0
+gravity_compensation: true
+progress_timeout_s: 0.20
+startup_timeout_s: 15.0

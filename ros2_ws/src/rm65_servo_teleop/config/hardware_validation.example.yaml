@@ -1,0 +1,13 @@
+# Template only. Keep false until actual hardware measurements have been reviewed.
+allow_hardware_motion: false
+frames_verified: false
+stop_verified: false
+speed_units_verified: false
+firmware_compatible: false
+collision_model_verified: false
+driver_commit: 61db3c367e8f5743ee68cee52c5574ec1ac645ca
+model_sha256: ""
+deployment_sha256: ""
+validated_at: ""
+operator: ""
+evidence: ""

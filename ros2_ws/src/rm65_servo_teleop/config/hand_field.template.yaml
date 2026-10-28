@@ -1,0 +1,23 @@
+# Incomplete by design. Copy outside the template and fill measured values.
+# No automatic tool power, Modbus setup, firmware update, reset or calibration.
+connection:
+  host: "192.168.10.18"
+  port: 8080
+  transport: rs485
+  device: null
+  protocol_major: null
+  identity: null  # Six registers 1000..1005 from a read-only identity probe.
+  timeout_s: 0.5
+  field_verified: false
+  presets_verified: false
+  stop_and_concurrency_verified: false
+  speeds: null
+  lower: null
+  upper: null
+task:
+  presets:
+    open: null
+    grasp: null
+  feedback_timeout_s: 0.5
+  movement_timeout_s: 4.0
+  position_tolerance: 200

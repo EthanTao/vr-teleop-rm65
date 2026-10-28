@@ -1,0 +1,8 @@
+# Synthetic fixtures only. These are NOT calibrated open/grasp poses or speeds.
+presets:
+  open: [0, 0, 0, 0, 0, 0]
+  grasp: [12000, 18000, 18000, 18000, 18000, 8000]
+mock_speed_units_s: 30000
+feedback_timeout_s: 0.5
+movement_timeout_s: 4.0
+position_tolerance: 200

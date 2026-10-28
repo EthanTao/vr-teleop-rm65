@@ -1,0 +1,5 @@
+#!/usr/bin/python3
+from rm65_servo_teleop.transport_node import main
+
+if __name__ == "__main__":
+    main()

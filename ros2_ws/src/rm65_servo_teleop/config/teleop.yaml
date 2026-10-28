@@ -1,0 +1,81 @@
+# One parameter source for simulation, dry-run and the future validated hardware I/O.
+# This is a model candidate from the 2026-09-24 snapshot, not a live calibration.
+model:
+  d6_m: 0.1612
+  mount_xyz_m: [0.0, 0.0, 0.0]
+  mount_rpy_rad: [0.0, 0.0, 0.0]
+  tool_xyz_m: [-0.003529, 0.002620, 0.069860]
+  tool_rpy_rad: [-0.050, 0.038, 1.582]
+  home_joint_rad: [0.0, 0.0, -1.047197551196598, 0.0, 1.047197551196598, 0.0]
+  joint_lower_rad: [-3.01941960595019, -2.181661564992912, -2.268928027592629, -3.01941960595019, -2.146754979953026, -6.19591884457987]
+  joint_upper_rad: [3.01941960595019, 2.181661564992912, 2.268928027592629, 3.01941960595019, 2.146754979953026, 6.19591884457987]
+  joint_velocity_rad_s: [0.3141592653589793, 0.3141592653589793, 0.39269908169872414, 0.39269908169872414, 0.39269908169872414, 0.39269908169872414]
+input:
+  planning_frame: base_link
+  tcp_frame: tcp
+  control_rate_hz: 50.0
+  position_scale: 1.0
+  rotation_scale: 0.25
+  grip_on: 0.2
+  grip_off: 0.15
+  xr_timeout_s: 0.20
+  feedback_timeout_s: 0.20
+  tf_timeout_s: 0.20
+  max_xr_step_m: 0.05
+  max_xr_rot_step_rad: 0.26
+  max_rotation_offset_rad: 0.20
+servo:
+  use_gazebo: false
+  command_in_type: speed_units
+  scale: {linear: 0.05, rotational: 0.25, joint: 0.1}
+  publish_period: 0.02
+  command_out_type: trajectory_msgs/JointTrajectory
+  publish_joint_positions: true
+  publish_joint_velocities: true
+  publish_joint_accelerations: false
+  smoothing_filter_plugin_name: online_signal_smoothing::ButterworthFilterPlugin
+  move_group_name: rm65_arm
+  planning_frame: base_link
+  ee_frame_name: tcp
+  robot_link_command_frame: tcp
+  incoming_command_timeout: 0.20
+  num_outgoing_halt_msgs_to_publish: 10
+  lower_singularity_threshold: 17.0
+  hard_stop_singularity_threshold: 30.0
+  leaving_singularity_threshold_multiplier: 2.0
+  joint_limit_margin: 0.02
+  cartesian_command_in_topic: /rm65/servo/delta_twist_cmds
+  joint_command_in_topic: /rm65/servo/delta_joint_cmds
+  joint_topic: /joint_states
+  status_topic: /rm65/servo/status
+  command_out_topic: /rm65_arm_controller/joint_trajectory
+  check_collisions: true
+  collision_check_rate: 25.0
+  self_collision_proximity_threshold: 0.01
+  scene_collision_proximity_threshold: 0.02
+pose_tracking:
+  publish_period: 0.02
+  windup_limit: 0.05
+  x_proportional_gain: 20.0
+  y_proportional_gain: 20.0
+  z_proportional_gain: 20.0
+  x_integral_gain: 0.0
+  y_integral_gain: 0.0
+  z_integral_gain: 0.0
+  x_derivative_gain: 0.0
+  y_derivative_gain: 0.0
+  z_derivative_gain: 0.0
+  angular_proportional_gain: 8.0
+  angular_integral_gain: 0.0
+  angular_derivative_gain: 0.0
+safety:
+  allow_hardware_motion: false
+  frames_verified: false
+  stop_verified: false
+  speed_units_verified: false
+  source_timeout_s: 0.20
+  max_linear_velocity_m_s: 0.05
+  max_angular_velocity_rad_s: 0.25
+recording:
+  output_root: /data/experiments
+  queue_size: 4096

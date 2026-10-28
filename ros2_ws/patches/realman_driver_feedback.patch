@@ -1,0 +1,446 @@
+--- a/rm_driver/src/rm_driver.cpp
++++ b/rm_driver/src/rm_driver.cpp
+@@ -14,6 +14,7 @@
+ 
+ 
+ #include "rm_driver.h"
++#include "rm65_servo_contract.h"
+ 
+ using namespace std::chrono_literals;
+ 
+@@ -353,6 +354,7 @@
+ 
+ void RmArm::Arm_Movej_CANFD_Callback(rm_ros_interfaces::msg::Jointpos::SharedPtr msg)
+ {
++    return;  // Replaced by generation-stamped servo_joint_command; legacy stream is disabled.
+     float joint[7];
+     bool follow;
+     float expand;
+@@ -388,6 +390,7 @@
+ 
+ void RmArm::Arm_Movej_CANFD_Custom_Callback(rm_ros_interfaces::msg::Jointposcustom::SharedPtr msg)
+ {
++    return;  // Replaced by generation-stamped servo_joint_command; legacy stream is disabled.
+     float joint[7];
+     bool follow;
+     float expand;
+@@ -422,6 +425,7 @@
+ 
+ void RmArm::Arm_Movep_CANFD_Callback(rm_ros_interfaces::msg::Cartepos::SharedPtr msg)
+ {
++    return;  // Replaced by generation-stamped servo_joint_command; legacy stream is disabled.
+     
+     rm_pose_t pose;
+     bool follow;
+@@ -460,6 +464,7 @@
+ 
+ void RmArm::Arm_Movep_CANFD_Custom_Callback(rm_ros_interfaces::msg::Carteposcustom::SharedPtr msg)
+ {
++    return;  // Replaced by generation-stamped servo_joint_command; legacy stream is disabled.
+     rm_pose_t pose;
+     bool follow;
+     int32_t res;
+@@ -3638,6 +3643,7 @@
+ 
+ void Udp_Robot_Status_Callback(rm_realtime_arm_joint_state_t data)
+ {
++    rm65_servo_contract::on_packet(data);
+     for(int i = 0; i < 6; i++)
+     {
+         Udp_RM_Joint.joint[i] = data.joint_status.joint_position[i];
+@@ -3803,6 +3809,8 @@
+ 
+ void UdpPublisherNode::udp_timer_callback() 
+ {
++    if (rm65_servo_contract::connection_fault.load()) return;
++
+     if(connect_state == 0)
+     {
+         // Rm_Api.Service_Realtime_Arm_Joint_State(Udp_RobotStatuscallback);
+@@ -3999,55 +4007,23 @@
+     }
+     else
+     {
+-        if(come_time == 0)
+-        {Arm_Close();}
+-        come_time++;
+-        while(Arm_Socket_Start_Connect())
+-        {
+-            if(ctrl_flag == true )
+-            {
+-                rclcpp::shutdown();
+-                exit(0);
+-            }
+-            RCLCPP_INFO (this->get_logger(),"Wait for connect ");
+-            sleep(1);
+-        }
+-        come_time = 0;
+-        connect_state = 0;
+-        connect_state_flag = 0;
+-        Arm_Start();
+-        RCLCPP_INFO (this->get_logger(),"Connect success\n");
++        rm65_servo_contract::on_connection_fault();
++        return;  // A new session is required; no automatic handle replacement.
+     }
+ }
+ 
+ void UdpPublisherNode::heart_timer_callback()
+ {
+-    int run_mode;
+-    if(connect_state == 0)
+-    {
+-        connect_state = Rm_Api.rm_get_arm_run_mode(robot_handle,&run_mode);
+-        if(connect_state !=0)
+-        {  
+-            RCLCPP_INFO (this->get_logger(),"connect_state = %d\n",connect_state);
+-            if(connect_state_flag <10)
+-            {
+-                connect_state = 0;
+-                connect_state_flag++;
+-            }
+-        }
+-        else
+-        {
+-            connect_state_flag = 0;
+-            connect_state = 0;
+-        }
+-    }
+-    else
+-    {
+-        if(robot_handle != NULL)
+-        {
+-            Rm_Api.rm_delete_robot_arm(robot_handle);
+-        }
+-    }
++    if (rm65_servo_contract::connection_fault.load()) return;
++    int run_mode = 0;
++    int result = -1;
++    {
++        std::lock_guard<std::mutex> lock(rm65_servo_contract::sdk_mutex);
++        result = Rm_Api.rm_get_arm_run_mode(robot_handle, &run_mode);
++    }
++    if (result != 0) rm65_servo_contract::on_connection_fault();
++    // No automatic handle deletion/reconnection alongside the streaming SDK.
++    // A connection fault remains locked until this process is restarted.
+ }
+ 
+ bool UdpPublisherNode::read_data()
+@@ -4119,11 +4095,13 @@
+ 
+ RmArm::~RmArm()
+ { 
++    rm65_servo_contract::shutdown();
+     Arm_Close();
+ }
+ 
+ RmArm::RmArm():
+     rclcpp::Node("rm_driver"){
++    rm65_servo_contract::setup(this);
+     //参数初始化
+     this->declare_parameter("arm_ip", "192.168.1.18");
+     arm_ip_ = this->get_parameter("arm_ip").as_string();
+@@ -4293,6 +4271,7 @@
+     Get_Controller_Version();//获取控制器版本
+     // RCLCPP_INFO (this->get_logger(),"11speed is %d\n",udp_joint_speed_state_);
+     Set_UDP_Configuration(udp_cycle_, udp_port_, udp_force_coordinate_, udp_ip_, udp_hand_, udp_rm_plus_base_, udp_rm_plus_state_);
++    return;  // Servo-only executable: never create any legacy SDK command endpoints.
+ 
+     /******************************************************获取udp配置********************************************************************/
+     Get_Realtime_Push_Result = this->create_publisher<rm_ros_interfaces::msg::Setrealtimepush>("rm_driver/get_realtime_push_result", rclcpp::ParametersQoS());
+--- a/rm_driver/CMakeLists.txt
++++ b/rm_driver/CMakeLists.txt
+@@ -19,6 +19,7 @@
+ find_package(ament_cmake REQUIRED)
+ find_package(rclcpp REQUIRED)
+ find_package(std_msgs REQUIRED)
++find_package(std_srvs REQUIRED)
+ find_package(sensor_msgs REQUIRED)
+ find_package(geometry_msgs REQUIRED)
+ find_package(rm_ros_interfaces REQUIRED)
+@@ -49,7 +50,7 @@
+   INSTALL_RPATH "$ORIGIN/.."
+ )
+ 
+-ament_target_dependencies(rm_driver rclcpp std_msgs sensor_msgs rm_ros_interfaces)
++ament_target_dependencies(rm_driver rclcpp std_msgs std_srvs sensor_msgs geometry_msgs rm_ros_interfaces)
+ 
+ install(TARGETS  rm_driver  DESTINATION lib/${PROJECT_NAME})
+ install(FILES ${RM_API_LIBRARY} DESTINATION lib)
+--- a/rm_driver/package.xml
++++ b/rm_driver/package.xml
+@@ -10,6 +10,7 @@
+   <buildtool_depend>ament_cmake</buildtool_depend>
+ 
+   <depend>rclcpp</depend>
++  <depend>std_srvs</depend>
+   <!-- <depend>std_msgs</depend>
+   <depend>sensor_msgs</depend> -->
+   <depend>rm_ros_interfaces</depend>
+--- /dev/null
++++ b/rm_driver/include/rm_driver/rm65_servo_contract.h
+@@ -0,0 +1,265 @@
++// Copyright 2026. Apache-2.0.
++// Coherent receive-time feedback and serialized stream/stop admission.
++// Applied only to RealManRobot/ros2_rm_robot 61db3c367e8f5743ee68cee52c5574ec1ac645ca.
++#pragma once
++#include <atomic>
++#include <algorithm>
++#include <cmath>
++#include <chrono>
++#include <fstream>
++#include <iomanip>
++#include <iostream>
++#include <mutex>
++#include <sstream>
++#include <string>
++#include <time.h>
++#include <unistd.h>
++#include <std_srvs/srv/trigger.hpp>
++
++namespace rm65_servo_contract
++{
++constexpr double DEG_TO_RAD = 0.017453292519943295;
++static std::mutex sdk_mutex;
++static std::mutex feedback_mutex;
++static bool motion_allowed = false;
++static std::atomic<bool> connection_fault(false);
++static std::atomic<bool> connection_stop_pending(false);
++static std::atomic<bool> stream_enabled(false);
++static std::atomic<bool> stop_confirmed(false);
++static std::atomic<bool> feedback_publish_fault(false);
++static std::atomic<unsigned long long> stream_generation(0);
++static std::atomic<unsigned long long> packet_counter(0);
++static rm_realtime_arm_joint_state_t last_packet{};
++static bool have_packet = false;
++static long long last_packet_monotonic_ns = 0;
++static rclcpp::Publisher<std_msgs::msg::String>::SharedPtr feedback_publisher;
++static rclcpp::Publisher<std_msgs::msg::String>::SharedPtr send_result_publisher;
++static std::atomic<unsigned long long> send_counter(0);
++static std::atomic<long long> last_command_ns(0);
++static rclcpp::TimerBase::SharedPtr watchdog_timer;
++static rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr slow_service;
++static rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr hard_service;
++static rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr enable_service;
++static rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr command_subscriber;
++
++inline long long clock_ns(clockid_t clock)
++{
++  timespec stamp{};
++  if (clock_gettime(clock, &stamp) != 0) return 0;
++  return static_cast<long long>(stamp.tv_sec) * 1000000000LL + stamp.tv_nsec;
++}
++inline const std::string& boot_id()
++{
++  static const std::string value = []() {
++    std::ifstream file("/proc/sys/kernel/random/boot_id");
++    std::string result; std::getline(file, result); return result;
++  }();
++  return value;
++}
++inline const std::string& session_id()
++{
++  static const std::string value = std::to_string(getpid()) + "-" + std::to_string(clock_ns(CLOCK_MONOTONIC));
++  return value;
++}
++inline bool packet_valid(const rm_realtime_arm_joint_state_t& packet)
++{
++  if (packet.errCode != 0 || arm_dof_g != 6 || !udp_joint_speed_state_g || packet.err.err_len > 24) return false;
++  for (int joint = 0; joint < 6; ++joint)
++    if (!std::isfinite(packet.joint_status.joint_position[joint]) ||
++        !std::isfinite(packet.joint_status.joint_speed[joint])) return false;
++  return true;
++}
++inline void on_packet(const rm_realtime_arm_joint_state_t& packet)
++{
++  // This function is called from the actual SDK UDP callback, never its replay timer.
++  const auto received_ns = clock_ns(CLOCK_MONOTONIC);
++  const auto ros_ns = clock_ns(CLOCK_REALTIME);
++  const auto sequence = ++packet_counter;
++  const bool valid = packet_valid(packet);
++  {
++    std::lock_guard<std::mutex> lock(feedback_mutex);
++    last_packet = packet;
++    last_packet_monotonic_ns = received_ns;
++    have_packet = valid;
++  }
++  if (!feedback_publisher || !rclcpp::ok()) return;
++  std::ostringstream json;
++  json << std::setprecision(17)
++       << "{\"contract\":\"rm65_udp_callback_v1\",\"clock_id\":\"" << boot_id()
++       << "\",\"session\":\"" << session_id() << "\",\"packet_id\":" << sequence
++       << ",\"source_monotonic_ns\":" << received_ns << ",\"source_ros_ns\":" << ros_ns
++       << ",\"parse_error\":" << (valid ? 0 : -3)
++       << ",\"joint_speed_enabled\":" << (udp_joint_speed_state_g ? "true" : "false")
++       << ",\"speed_unit\":\"rad/s_from_sdk_degree_s\"";
++  // The fixed SDK rm_define.h states degrees/s (0.01 deg/s accuracy), not the
++  // outdated ROS Jointspeed documentation's RPM. Do not multiply this float by .01.
++  if (valid) {
++    json << ",\"joint_names\":[\"joint1\",\"joint2\",\"joint3\",\"joint4\",\"joint5\",\"joint6\"]";
++    json << ",\"position_rad\":[";
++    for (int joint = 0; joint < 6; ++joint) json << (joint ? "," : "") << packet.joint_status.joint_position[joint] * DEG_TO_RAD;
++    json << "],\"velocity_rad_s\":[";
++    for (int joint = 0; joint < 6; ++joint) json << (joint ? "," : "") << packet.joint_status.joint_speed[joint] * DEG_TO_RAD;
++    json << "],\"velocity_degree_s_raw\":[";
++    for (int joint = 0; joint < 6; ++joint) json << (joint ? "," : "") << packet.joint_status.joint_speed[joint];
++    json << "],\"joint_errors\":[";
++    for (int joint = 0; joint < 6; ++joint) json << (joint ? "," : "") << packet.joint_status.joint_err_code[joint];
++    json << "],\"joint_enabled\":[";
++    for (int joint = 0; joint < 6; ++joint) json << (joint ? "," : "") << (packet.joint_status.joint_en_flag[joint] ? "true" : "false");
++    json << "],\"controller_errors\":[";
++    for (unsigned int index = 0; index < packet.err.err_len; ++index) json << (index ? "," : "") << packet.err.err[index];
++    json << "]";
++  }
++  json << "}";
++  std_msgs::msg::String message; message.data = json.str();
++  try {
++    feedback_publisher->publish(message);
++    if (!stream_enabled.load()) feedback_publish_fault.store(false);
++  } catch (const std::exception&) {
++    // Let the timer execute the SDK stop; never call the SDK from its own UDP callback.
++    feedback_publish_fault.store(true);
++  }
++}
++inline void record_send_result(int result, const std::string& event = "command_return")
++{
++  if (result != 0) {
++    stream_enabled.store(false); stop_confirmed.store(false); ++stream_generation;
++  }
++  if (!rclcpp::ok() || !send_result_publisher) return;
++  std_msgs::msg::String message;
++  message.data = "{\"api_code\":" + std::to_string(result) +
++                 ",\"event\":\"" + event + "\",\"session\":\"" + session_id() + "\",\"stream_enabled\":" + (stream_enabled.load() ? "true" : "false") +
++                 ",\"generation\":" + std::to_string(stream_generation.load()) +
++                 ",\"stream_sequence\":" + std::to_string(++send_counter) +
++                 ",\"source_monotonic_ns\":" + std::to_string(clock_ns(CLOCK_MONOTONIC)) + "}";
++  send_result_publisher->publish(message);
++}
++inline bool healthy_fresh_packet(bool stationary)
++{
++  if (connection_fault.load()) return false;
++  std::lock_guard<std::mutex> lock(feedback_mutex);
++  const auto age = clock_ns(CLOCK_MONOTONIC) - last_packet_monotonic_ns;
++  if (!have_packet || boot_id().empty() || age < 0 || age > 200000000LL || !packet_valid(last_packet)) return false;
++  if (last_packet.err.err_len != 0) {
++    for (unsigned int index = 0; index < last_packet.err.err_len; ++index)
++      if (last_packet.err.err[index] != 0) return false;
++  }
++  for (int joint = 0; joint < 6; ++joint)
++    if (std::abs(last_packet.joint_status.joint_speed[joint]) > (stationary ? 1.0 : (joint < 2 ? 18.0 : 22.5)) ||
++        last_packet.joint_status.joint_err_code[joint] != 0 ||
++        !last_packet.joint_status.joint_en_flag[joint]) return false;
++  return true;
++}
++inline std::string reply_json(int code, unsigned long long generation, bool enabled)
++{
++  return "{\"api_code\":" + std::to_string(code) + ",\"generation\":" +
++         std::to_string(generation) + ",\"stream_enabled\":" + (enabled ? "true" : "false") + "}";
++}
++inline void on_connection_fault()
++{
++  if (connection_fault.exchange(true)) return;
++  stream_enabled.store(false); stop_confirmed.store(false); ++stream_generation;
++  if (motion_allowed) connection_stop_pending.store(true);
++}
++inline void shutdown()
++{
++  if (!motion_allowed) return;
++  stream_enabled.store(false); stop_confirmed.store(false); ++stream_generation;
++  std::lock_guard<std::mutex> lock(sdk_mutex);
++  const int result = Rm_Api.rm_set_arm_stop(robot_handle);
++  stop_confirmed.store(result == 0);
++  std::cerr << "RM65 native shutdown hard-stop api_code=" << result << std::endl;
++}
++inline void setup(rclcpp::Node* node)
++{
++  motion_allowed = node->declare_parameter<bool>("allow_servo_motion", false);
++  feedback_publisher = node->create_publisher<std_msgs::msg::String>("rm_driver/feedback_snapshot", rclcpp::QoS(1));
++  send_result_publisher = node->create_publisher<std_msgs::msg::String>("rm_driver/servo_send_result", rclcpp::QoS(10));
++  // Read-only mode has no command subscription and no stop/enable services.
++  if (!motion_allowed) return;
++  slow_service = node->create_service<std_srvs::srv::Trigger>("rm_driver/servo_slow_stop",
++      [](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
++         std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
++        stream_enabled.store(false);
++        stop_confirmed.store(false);
++        const auto generation = ++stream_generation;
++        std::lock_guard<std::mutex> lock(sdk_mutex);
++        const int result = Rm_Api.rm_set_arm_slow_stop(robot_handle);
++        const bool current = generation == stream_generation.load();
++        if (current) stop_confirmed.store(result == 0);
++        response->success = result == 0 && current;
++        response->message = reply_json(result, generation, false);
++      });
++  hard_service = node->create_service<std_srvs::srv::Trigger>("rm_driver/servo_hard_stop",
++      [](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
++         std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
++        stream_enabled.store(false);
++        stop_confirmed.store(false);
++        const auto generation = ++stream_generation;
++        std::lock_guard<std::mutex> lock(sdk_mutex);
++        const int result = Rm_Api.rm_set_arm_stop(robot_handle);
++        const bool current = generation == stream_generation.load();
++        if (current) stop_confirmed.store(result == 0);
++        response->success = result == 0 && current;
++        response->message = reply_json(result, generation, false);
++      });
++  enable_service = node->create_service<std_srvs::srv::Trigger>("rm_driver/servo_enable_stream",
++      [](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
++         std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
++        std::lock_guard<std::mutex> lock(sdk_mutex);
++        const auto generation = stream_generation.load();
++        bool allowed = stop_confirmed.load() && !feedback_publish_fault.load() && healthy_fresh_packet(true);
++        last_command_ns.store(clock_ns(CLOCK_MONOTONIC));
++        stream_enabled.store(allowed);
++        if (generation != stream_generation.load() || !stop_confirmed.load()) {
++          stream_enabled.store(false); allowed = false;
++        }
++        response->success = allowed;
++        response->message = reply_json(allowed ? 0 : -1, generation, allowed);
++      });
++  command_subscriber = node->create_subscription<sensor_msgs::msg::JointState>(
++      "rm_driver/servo_joint_command", rclcpp::QoS(1),
++      [](const sensor_msgs::msg::JointState::SharedPtr message) {
++        std::lock_guard<std::mutex> lock(sdk_mutex);
++        if (!stream_enabled.load()) return;
++        const std::string& token = message->header.frame_id;
++        if (token.empty() || token.size() > 20 ||
++            !std::all_of(token.begin(), token.end(), [](char c) { return c >= '0' && c <= '9'; })) return;
++        unsigned long long generation = 0;
++        try { generation = std::stoull(token); } catch (const std::exception&) { return; }
++        if (generation != stream_generation.load()) return;
++        const long long stamp = static_cast<long long>(message->header.stamp.sec) * 1000000000LL +
++                                message->header.stamp.nanosec;
++        const auto age = clock_ns(CLOCK_REALTIME) - stamp;
++        if (stamp <= 0 || message->header.stamp.nanosec >= 1000000000U || age < 0 || age > 200000000LL ||
++            message->name.size() != 6 || message->position.size() != 6) {
++          record_send_result(-3); return;
++        }
++        float joint_degree[7]{};
++        for (int index = 0; index < 6; ++index) {
++          if (message->name[index] != "joint" + std::to_string(index + 1) ||
++              !std::isfinite(message->position[index])) {
++            record_send_result(-3); return;
++          }
++          joint_degree[index] = static_cast<float>(message->position[index] / DEG_TO_RAD);
++        }
++        // Only this callback can reach the SDK's high-follow streaming API.
++        const int result = Rm_Api.rm_movej_canfd(robot_handle, joint_degree, true, 0.0f, 0, 0);
++        if (result == 0) last_command_ns.store(clock_ns(CLOCK_MONOTONIC));
++        record_send_result(result);
++      });
++  // This watchdog remains in the driver if the bridge process dies. It never
++  // refreshes feedback and cannot reopen the stream.
++  watchdog_timer = node->create_wall_timer(std::chrono::milliseconds(20), []() {
++    const bool connection_event = connection_stop_pending.exchange(false);
++    if (!stream_enabled.load() && !connection_event) return;
++    const auto age = clock_ns(CLOCK_MONOTONIC) - last_command_ns.load();
++    if (!connection_event && age >= 0 && age <= 200000000LL && !feedback_publish_fault.load() && healthy_fresh_packet(false)) return;
++    stream_enabled.store(false); stop_confirmed.store(false);
++    const auto generation = ++stream_generation;
++    std::lock_guard<std::mutex> lock(sdk_mutex);
++    const int result = Rm_Api.rm_set_arm_stop(robot_handle);
++    if (generation == stream_generation.load()) stop_confirmed.store(result == 0);
++    record_send_result(result, "watchdog_hard_stop");
++  });
++}
++}  // namespace rm65_servo_contract

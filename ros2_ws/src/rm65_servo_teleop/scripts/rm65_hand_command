@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+from rm65_servo_teleop.hand_command import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

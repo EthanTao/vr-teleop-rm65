@@ -1,0 +1,5 @@
+repositories:
+  vendor/rm_robot:
+    type: git
+    url: https://github.com/RealManRobot/ros2_rm_robot.git
+    version: 61db3c367e8f5743ee68cee52c5574ec1ac645ca

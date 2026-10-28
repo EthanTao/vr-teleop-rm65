@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>RM65 · 仿真控制台</title>
+  <style>
+    :root { color-scheme: light; --ink:#202d3a; --muted:#617281; --line:#dce3e8; --blue:#136b83; --pale:#e9f4f6; --red:#a83838; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:#f3f5f7; font:14px/1.55 "Segoe UI","Microsoft YaHei",sans-serif; }
+    button { font:inherit; }
+    main { max-width:1280px; margin:auto; padding:26px; }
+    header { display:flex; gap:18px; justify-content:space-between; align-items:center; margin-bottom:20px; }
+    h1 { margin:0; font-size:25px; font-weight:650; letter-spacing:.02em; }
+    h2 { margin:0 0 15px; font-size:16px; font-weight:650; }
+    p { margin:7px 0; }
+    .muted, small { color:var(--muted); }
+    .subtitle { color:var(--muted); margin-top:3px; }
+    .tag { display:inline-block; color:var(--blue); background:var(--pale); border-radius:5px; padding:3px 9px; font-size:12px; vertical-align:middle; margin-left:9px; }
+    .connection { min-width:225px; text-align:right; }
+    .connection strong { display:block; font-weight:650; }
+    .dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:#87949f; margin-right:7px; }
+    .dot.ok { background:#23866b; }
+    .dot.bad { background:var(--red); }
+    .layout { display:grid; grid-template-columns:380px minmax(0,1fr); gap:18px; align-items:start; }
+    .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:20px; }
+    .stack { display:grid; gap:18px; }
+    .guide { margin-bottom:17px; }
+    kbd { display:inline-block; min-width:24px; padding:1px 6px; border:1px solid #cbd5dd; border-bottom-width:2px; border-radius:4px; background:#f8fafb; color:#34495a; text-align:center; font-family:inherit; font-size:12px; line-height:1.5; }
+    .enable { border:1px solid var(--line); background:#f7f9fa; border-radius:7px; padding:11px 13px; margin:14px 0; min-height:49px; }
+    .enable.active { color:#12634e; background:#eaf6f0; border-color:#acd7c4; }
+    .controls { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .direction { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 13px; min-height:44px; border:1px solid #cbd7df; border-radius:6px; color:#2c465a; background:white; cursor:pointer; touch-action:none; user-select:none; -webkit-user-select:none; }
+    .direction:hover:not(:disabled) { border-color:var(--blue); background:#f4fafb; }
+    .direction.held { background:var(--blue); color:white; border-color:var(--blue); }
+    .direction.held kbd { background:#fff; }
+    .direction:disabled { opacity:.45; cursor:not-allowed; }
+    .control-title { display:flex; justify-content:space-between; align-items:center; margin:17px 0 8px; }
+    .control-title strong { font-size:13px; }
+    .stop { width:100%; margin-top:20px; padding:11px; border:1px solid #dfb4b4; border-radius:6px; color:var(--red); background:#fff4f3; font-weight:650; cursor:pointer; }
+    .stop:hover { background:#ffe9e7; }
+    button:focus-visible { outline:3px solid #62aebf; outline-offset:2px; }
+    .hint { margin-top:12px; font-size:12px; }
+    .status-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px 20px; }
+    .label { display:block; font-size:12px; color:var(--muted); margin-bottom:3px; }
+    .value { font-weight:550; overflow-wrap:anywhere; }
+    .numeric { font-variant-numeric:tabular-nums; font-family:Consolas,"Microsoft YaHei",monospace; }
+    .reason { margin-top:15px; padding-top:13px; border-top:1px solid var(--line); }
+    .reason .value { font-size:13px; font-weight:400; }
+    .card-title { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
+    .card-title h2 { margin:0; }
+    .stale-tag { color:var(--red); font-size:12px; font-weight:550; }
+    .stale .live-value { opacity:.5; }
+    table { width:100%; border-collapse:collapse; text-align:right; }
+    th { font-size:12px; font-weight:550; color:var(--muted); }
+    th, td { padding:9px 6px; border-bottom:1px solid #edf0f3; }
+    th:first-child, td:first-child { text-align:left; }
+    tbody tr:last-child td { border-bottom:0; }
+    .pose-table th:first-child { width:19%; }
+    .pose-table td { font-size:13px; }
+    .quaternion { font-size:11px!important; white-space:nowrap; }
+    .errors { display:flex; gap:25px; border-top:1px solid var(--line); padding-top:12px; margin-top:10px; }
+    .errors strong { font-size:18px; font-weight:550; }
+    .joints { grid-column:1/-1; }
+    .table-scroll { overflow-x:auto; }
+    .warn { color:#9b640d; }
+    .danger { color:var(--red); }
+    footer { font-size:12px; color:var(--muted); margin-top:18px; text-align:center; }
+    @media (max-width:880px) { .layout { grid-template-columns:1fr; } .joints { grid-column:auto; } header { align-items:flex-start; } main { padding:16px; } .connection { min-width:0; max-width:45%; } }
+    @media (max-width:520px) { h1 { font-size:21px; } header { display:block; } .connection { text-align:left; max-width:none; margin-top:13px; } .card { padding:16px; } .quaternion { font-size:10px!important; } .errors { gap:16px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>RM65 仿真控制台 <span class="tag">仅仿真</span></h1><p class="subtitle">主动检查末端方向、姿态与关节变化</p></div>
+    <div class="connection" role="status" aria-live="polite"><strong><span id="connection-dot" class="dot"></span><span id="connection-title">正在连接</span></strong><small id="connection-detail">连接就绪后，按住使能再移动</small></div>
+  </header>
+
+  <div class="layout">
+    <section class="card" aria-labelledby="control-heading">
+      <h2 id="control-heading">移动控制</h2>
+      <p class="guide">键盘：按住 <kbd>空格</kbd> + 方向键。<br>鼠标：持续按住下方方向按钮。松开即释放操作。</p>
+      <div id="enable-indicator" class="enable" role="status">等待连接，操作未使能</div>
+      <div class="control-title"><strong>平移 · base_link 坐标系</strong><small id="linear-speed">—</small></div>
+      <div class="controls" id="translation-controls">
+        <button class="direction" type="button" data-code="KeyW" data-axis="0" data-sign="1" disabled><span>+X</span><kbd>W</kbd></button>
+        <button class="direction" type="button" data-code="KeyS" data-axis="0" data-sign="-1" disabled><span>−X</span><kbd>S</kbd></button>
+        <button class="direction" type="button" data-code="KeyA" data-axis="1" data-sign="1" disabled><span>+Y</span><kbd>A</kbd></button>
+        <button class="direction" type="button" data-code="KeyD" data-axis="1" data-sign="-1" disabled><span>−Y</span><kbd>D</kbd></button>
+        <button class="direction" type="button" data-code="KeyR" data-axis="2" data-sign="1" disabled><span>+Z</span><kbd>R</kbd></button>
+        <button class="direction" type="button" data-code="KeyF" data-axis="2" data-sign="-1" disabled><span>−Z</span><kbd>F</kbd></button>
+      </div>
+      <div class="control-title"><strong>旋转 · 绕 base_link 轴</strong><small id="angular-speed">—</small></div>
+      <div class="controls" id="rotation-controls">
+        <button class="direction" type="button" data-code="KeyJ" data-axis="3" data-sign="1" disabled><span>+RX</span><kbd>J</kbd></button>
+        <button class="direction" type="button" data-code="KeyL" data-axis="3" data-sign="-1" disabled><span>−RX</span><kbd>L</kbd></button>
+        <button class="direction" type="button" data-code="KeyI" data-axis="4" data-sign="1" disabled><span>+RY</span><kbd>I</kbd></button>
+        <button class="direction" type="button" data-code="KeyK" data-axis="4" data-sign="-1" disabled><span>−RY</span><kbd>K</kbd></button>
+        <button class="direction" type="button" data-code="KeyU" data-axis="5" data-sign="1" disabled><span>+RZ</span><kbd>U</kbd></button>
+        <button class="direction" type="button" data-code="KeyO" data-axis="5" data-sign="-1" disabled><span>−RZ</span><kbd>O</kbd></button>
+      </div>
+      <button class="stop" id="stop" type="button">停止操作 <kbd>Esc</kbd></button>
+      <p class="hint muted">切换窗口、页面隐藏或连接中断时释放全部操作。恢复后须重新按下，不自动续动。</p>
+    </section>
+
+    <div class="stack" id="state-panels">
+      <section class="card" id="status-card" aria-labelledby="status-heading">
+        <div class="card-title"><h2 id="status-heading">运行状态</h2><span class="stale-tag" data-stale-tag>等待数据</span></div>
+        <div class="status-grid live-value">
+          <div><span class="label">反馈年龄</span><span id="feedback-age" class="value numeric">—</span></div>
+          <div><span class="label">TF 年龄</span><span id="tf-age" class="value numeric">—</span></div>
+          <div><span class="label">输入使能</span><span id="input-enabled" class="value">—</span></div>
+          <div><span class="label">位姿跟随</span><span id="tracking-active" class="value">—</span></div>
+          <div><span class="label">跟随状态</span><span id="tracking-state" class="value">—</span></div>
+          <div><span class="label">Servo 状态码</span><span id="servo-code" class="value numeric">—</span></div>
+        </div>
+        <div class="reason live-value"><span class="label">操作 / 停止原因</span><span id="control-reason" class="value">—</span></div>
+        <div class="reason live-value"><span class="label">输入原因</span><span id="input-reason" class="value">—</span></div>
+      </section>
+
+      <section class="card" id="pose-card" aria-labelledby="pose-heading">
+        <div class="card-title"><h2 id="pose-heading">末端位姿 · base_link</h2><span class="stale-tag" data-stale-tag>等待数据</span></div>
+        <div class="table-scroll live-value">
+          <table class="pose-table">
+            <thead><tr><th>分量</th><th>实际 TCP</th><th>目标 TCP</th></tr></thead>
+            <tbody>
+              <tr><td>X / m</td><td id="actual-x" class="numeric">—</td><td id="target-x" class="numeric">—</td></tr>
+              <tr><td>Y / m</td><td id="actual-y" class="numeric">—</td><td id="target-y" class="numeric">—</td></tr>
+              <tr><td>Z / m</td><td id="actual-z" class="numeric">—</td><td id="target-z" class="numeric">—</td></tr>
+              <tr><td>四元数<br><small>x, y, z, w</small></td><td id="actual-q" class="numeric quaternion">—</td><td id="target-q" class="numeric quaternion">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="errors live-value">
+          <div><span class="label">位置误差</span><strong id="position-error" class="numeric">—</strong></div>
+          <div><span class="label">姿态误差</span><strong id="rotation-error" class="numeric">—</strong></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="card joints" id="joint-card" aria-labelledby="joint-heading">
+      <div class="card-title"><h2 id="joint-heading">关节反馈</h2><span class="stale-tag" data-stale-tag>等待数据</span></div>
+      <div class="table-scroll live-value">
+        <table><thead><tr><th>关节</th><th>角度 / °</th><th>速度 / °·s⁻¹</th><th>限位范围 / °</th><th>最近限位余量 / °</th></tr></thead><tbody id="joint-rows"></tbody></table>
+      </div>
+    </section>
+  </div>
+  <footer>仿真检查是上机前置；真实侧装、TCP、UDP 反馈与停止行为仍需单独验收。</footer>
+</main>
+<script>
+"use strict";
+(() => {
+  const TOKEN = "__RM65_TOKEN__";
+  const HEARTBEAT_MS = 10;
+  const STATE_PERIOD_MS = 180;
+  const MAX_STATE_AGE_MS = 600;
+  const byId = id => document.getElementById(id);
+  const buttons = Array.from(document.querySelectorAll(".direction"));
+  const mapping = new Map(buttons.map(button => [button.dataset.code, [Number(button.dataset.axis), Number(button.dataset.sign)]]));
+  const keys = new Set();
+  const blockedKeys = new Set();
+  const clientId = typeof crypto.randomUUID === "function" ? crypto.randomUUID() :
+    "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c => (Number(c) ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> Number(c) / 4).toString(16));
+  let sequence = 0;
+  let lastState = null;
+  let lastStateAt = 0;
+  let getHealthy = false;
+  let postHealthy = false;
+  let releaseNeeded = true;
+  let releasedAcknowledged = false;
+  let postInFlight = false;
+  let getInFlight = false;
+  let intentVersion = 0;
+  let pointer = null;
+  let closing = false;
+  let localReason = "等待连接，操作未使能";
+  const jointRows = [];
+
+  for (let index = 0; index < 6; index += 1) {
+    const row = document.createElement("tr");
+    const cells = [];
+    for (let column = 0; column < 5; column += 1) {
+      const cell = document.createElement("td");
+      cell.textContent = column === 0 ? "关节 " + (index + 1) : "—";
+      if (column) cell.className = "numeric";
+      row.appendChild(cell);
+      cells.push(cell);
+    }
+    byId("joint-rows").appendChild(row);
+    jointRows.push(cells);
+  }
+
+  const finite = value => typeof value === "number" && Number.isFinite(value);
+  const numberText = (value, digits, suffix = "") => finite(value) ? value.toFixed(digits) + suffix : "—";
+  const text = (id, value) => { byId(id).textContent = value == null || value === "" ? "—" : String(value); };
+  const isVisible = () => document.visibilityState === "visible" && document.hasFocus();
+  const measuredAge = field => {
+    const age = lastState?.[field];
+    return finite(age) && age >= 0 ? age + (performance.now() - lastStateAt) / 1000 : null;
+  };
+  const ageWithin = (field, limit) => {
+    const age = measuredAge(field);
+    return finite(age) && age <= limit;
+  };
+  const stateFresh = () => getHealthy && lastState !== null && performance.now() - lastStateAt <= MAX_STATE_AGE_MS && ageWithin("telemetry_age_s", 0.25);
+  const connected = () => stateFresh() && postHealthy;
+  const canControl = () => connected() && lastState.ready === true && !releaseNeeded && isVisible() && !closing;
+
+  function inputIntent() {
+    const axes = [0, 0, 0, 0, 0, 0];
+    const pressed = canControl() && (keys.has("Space") || pointer !== null);
+    if (pressed) {
+      if (keys.has("Space")) for (const code of keys) {
+        const direction = mapping.get(code);
+        if (direction) axes[direction[0]] += direction[1];
+      }
+      if (pointer) axes[pointer.axis] += pointer.sign;
+    }
+    return {pressed, axes: axes.map(Math.sign)};
+  }
+
+  function tryRearm() {
+    if (releaseNeeded && releasedAcknowledged && connected() && lastState.ready === true && lastState.control?.release_required !== true &&
+        keys.size === 0 && blockedKeys.size === 0 && pointer === null && isVisible() && !closing) {
+      releaseNeeded = false;
+      localReason = "已就绪，按住空格和方向键移动";
+    }
+  }
+
+  function stopAll(reason) {
+    for (const code of keys) blockedKeys.add(code);
+    keys.clear();
+    const oldPointer = pointer;
+    pointer = null;
+    releaseNeeded = true;
+    releasedAcknowledged = false;
+    localReason = reason;
+    intentVersion += 1;
+    if (oldPointer && oldPointer.element.hasPointerCapture(oldPointer.id)) {
+      oldPointer.element.releasePointerCapture(oldPointer.id);
+    }
+    render();
+    void sendInput();
+  }
+
+  function newPacket(intent) {
+    if (!Number.isSafeInteger(sequence + 1)) throw new Error("sequence exhausted");
+    sequence += 1;
+    return {token:TOKEN, client_id:clientId, seq:sequence, pressed:intent.pressed, axes:intent.axes};
+  }
+
+  async function sendInput() {
+    if (postInFlight || closing) return;
+    postInFlight = true;
+    const sentVersion = intentVersion;
+    const intent = inputIntent();
+    const aborter = new AbortController();
+    const timeout = setTimeout(() => aborter.abort(), 250);
+    let failed = false;
+    try {
+      const response = await fetch("/api/input", {
+        method:"POST", headers:{"Content-Type":"application/json"}, cache:"no-store", credentials:"same-origin",
+        body:JSON.stringify(newPacket(intent)), signal:aborter.signal
+      });
+      if (!response.ok) throw new Error("input rejected");
+      postHealthy = true;
+      if (!intent.pressed) releasedAcknowledged = true;
+      tryRearm();
+    } catch (_) {
+      failed = true;
+      postHealthy = false;
+      stopAll("连接中断，操作已释放；请松开所有按键");
+    } finally {
+      clearTimeout(timeout);
+      postInFlight = false;
+      render();
+      // A release that happened during a request goes next; no stale request queue.
+      if (sentVersion !== intentVersion && (!failed || intent.pressed)) setTimeout(() => void sendInput(), 0);
+    }
+  }
+
+  async function pollState() {
+    if (getInFlight || closing) return;
+    getInFlight = true;
+    const aborter = new AbortController();
+    const timeout = setTimeout(() => aborter.abort(), 450);
+    try {
+      const response = await fetch("/api/state", {cache:"no-store", credentials:"same-origin", signal:aborter.signal});
+      if (!response.ok) throw new Error("state unavailable");
+      const value = await response.json();
+      if (!value || value.mode !== "simulation_manual" || typeof value.ready !== "boolean") throw new Error("unexpected mode");
+      const wasPressed = inputIntent().pressed;
+      lastState = value;
+      lastStateAt = performance.now();
+      getHealthy = true;
+      if (value.control?.release_required === true) {
+        if (wasPressed) stopAll("单次移动已停止，请松开所有按键后重新按下");
+        else localReason = "单次移动已停止，请松开所有按键后重新按下";
+      } else if (!value.ready) {
+        stopAll("仿真暂未就绪，请松开所有按键");
+      }
+      tryRearm();
+    } catch (_) {
+      getHealthy = false;
+      stopAll("连接中断，操作已释放；请松开所有按键");
+    } finally {
+      clearTimeout(timeout);
+      getInFlight = false;
+      render();
+    }
+  }
+
+  function renderPose(prefix, pose) {
+    for (let index = 0; index < 3; index += 1) text(prefix + "-" + "xyz"[index], numberText(pose?.position?.[index], 5));
+    const quaternion = pose?.quaternion_xyzw;
+    text(prefix + "-q", Array.isArray(quaternion) && quaternion.length === 4 && quaternion.every(finite) ?
+      quaternion.map(value => value.toFixed(4)).join(", ") : "—");
+  }
+
+  function render() {
+    const state = lastState;
+    const healthy = connected();
+    const intent = inputIntent();
+    const moving = intent.pressed && intent.axes.some(value => value !== 0);
+    const statusTitle = !state ? "正在连接" : !healthy ? "连接中断" : !state.ready ? "仿真未就绪" : releaseNeeded ? "操作已锁定" : moving ? "方向操作中" : "已就绪";
+    text("connection-title", statusTitle);
+    byId("connection-dot").className = "dot" + (healthy ? " ok" : state ? " bad" : "");
+    text("connection-detail", !healthy ? "保留最后反馈；恢复后需重新按下" : releaseNeeded ? "松开所有按键后重新操作" : "松开空格或按钮即释放操作");
+    text("enable-indicator", !canControl() ? localReason : moving ? "已按住移动方向 · 松开即释放" : intent.pressed ? "使能已按住，选择移动方向" : "未使能 · 按住空格和方向键");
+    byId("enable-indicator").classList.toggle("active", intent.pressed);
+    for (const button of buttons) {
+      button.disabled = !canControl();
+      const held = intent.pressed && ((keys.has("Space") && keys.has(button.dataset.code)) || pointer?.element === button);
+      button.classList.toggle("held", held);
+      button.setAttribute("aria-pressed", held ? "true" : "false");
+    }
+    const cardFreshness = [
+      ["status-card", healthy],
+      ["pose-card", healthy && ageWithin("tf_age_s", 0.20)],
+      ["joint-card", healthy && ageWithin("feedback_age_s", 0.20)]
+    ];
+    for (const [id, fresh] of cardFreshness) {
+      const card = byId(id);
+      card.classList.toggle("stale", !fresh);
+      card.querySelector("[data-stale-tag]").textContent = !state ? "等待数据" : !fresh ? "已过期 · 最后反馈" : "";
+    }
+    if (!state) return;
+    const feedbackAge = measuredAge("feedback_age_s");
+    const tfAge = measuredAge("tf_age_s");
+    text("feedback-age", numberText(finite(feedbackAge) ? feedbackAge * 1000 : null, 0, " ms"));
+    text("tf-age", numberText(finite(tfAge) ? tfAge * 1000 : null, 0, " ms"));
+    text("input-enabled", typeof state.input?.enabled === "boolean" ? state.input.enabled ? "已使能" : "未使能" : "—");
+    text("tracking-active", typeof state.tracking?.active === "boolean" ? state.tracking.active ? "跟随中" : "保持 / 未跟随" : "—");
+    text("tracking-state", state.tracking?.state);
+    text("servo-code", Number.isInteger(state.servo_code) ? state.servo_code : "—");
+    text("control-reason", state.control?.reason);
+    text("input-reason", state.input?.reason);
+    text("linear-speed", numberText(finite(state.control?.linear_speed_m_s) ? state.control.linear_speed_m_s * 1000 : null, 0, " mm/s"));
+    text("angular-speed", numberText(finite(state.control?.angular_speed_rad_s) ? state.control.angular_speed_rad_s * 180 / Math.PI : null, 1, " °/s"));
+    renderPose("actual", state.actual_pose);
+    renderPose("target", state.target_pose);
+    text("position-error", numberText(state.pose_error_mm, 2, " mm"));
+    text("rotation-error", numberText(state.rotation_error_deg, 2, " °"));
+    const joint = state.joint;
+    for (let index = 0; index < 6; index += 1) {
+      const cells = jointRows[index];
+      const q = joint?.position_rad?.[index];
+      const velocity = joint?.velocity_rad_s?.[index];
+      const lower = joint?.lower_rad?.[index];
+      const upper = joint?.upper_rad?.[index];
+      const margin = finite(q) && finite(lower) && finite(upper) ? Math.min(q - lower, upper - q) * 180 / Math.PI : null;
+      cells[0].textContent = typeof joint?.names?.[index] === "string" ? joint.names[index] : "关节 " + (index + 1);
+      cells[1].textContent = numberText(finite(q) ? q * 180 / Math.PI : null, 3);
+      cells[2].textContent = numberText(finite(velocity) ? velocity * 180 / Math.PI : null, 3);
+      cells[3].textContent = finite(lower) && finite(upper) ? numberText(lower * 180 / Math.PI, 1) + " ~ " + numberText(upper * 180 / Math.PI, 1) : "—";
+      cells[4].textContent = numberText(margin, 2);
+      cells[4].className = "numeric" + (finite(margin) && margin < 0 ? " danger" : finite(margin) && margin < 5 ? " warn" : "");
+    }
+  }
+
+  function changed() { intentVersion += 1; render(); void sendInput(); }
+  window.addEventListener("keydown", event => {
+    if (event.code === "Escape") { event.preventDefault(); stopAll("已停止操作，请松开所有按键"); return; }
+    if (event.code !== "Space" && !mapping.has(event.code)) return;
+    event.preventDefault();
+    if (event.repeat) return;
+    if (!canControl()) { blockedKeys.add(event.code); return; }
+    keys.add(event.code);
+    changed();
+  });
+  window.addEventListener("keyup", event => {
+    if (event.code !== "Space" && !mapping.has(event.code)) return;
+    event.preventDefault();
+    keys.delete(event.code);
+    blockedKeys.delete(event.code);
+    tryRearm();
+    changed();
+  });
+  for (const button of buttons) {
+    button.addEventListener("pointerdown", event => {
+      event.preventDefault();
+      if (event.button !== 0 || !canControl()) return;
+      if (pointer) { stopAll("一次按住一个方向按钮"); return; }
+      pointer = {id:event.pointerId, element:button, axis:Number(button.dataset.axis), sign:Number(button.dataset.sign)};
+      button.setPointerCapture(event.pointerId);
+      changed();
+    });
+    button.addEventListener("pointerup", event => { if (pointer?.id === event.pointerId) stopAll("方向按钮已松开，操作已释放"); });
+    button.addEventListener("pointercancel", () => stopAll("方向操作已取消，请重新按下"));
+    button.addEventListener("lostpointercapture", event => {
+      if (pointer?.id === event.pointerId) stopAll("方向操作已释放，请重新按下");
+    });
+    button.addEventListener("contextmenu", event => event.preventDefault());
+    button.addEventListener("dragstart", event => event.preventDefault());
+  }
+  byId("stop").addEventListener("click", () => stopAll("已停止操作，请松开所有按键"));
+  window.addEventListener("blur", () => stopAll("窗口已失焦，操作已释放"));
+  window.addEventListener("focus", () => {
+    // Held keys cannot resume through auto-repeat after returning to this window.
+    keys.clear(); blockedKeys.clear(); releaseNeeded = true; releasedAcknowledged = false;
+    localReason = "窗口已恢复，请重新按住使能和方向";
+    changed();
+  });
+  document.addEventListener("visibilitychange", () => { if (document.hidden) stopAll("页面已隐藏，操作已释放"); });
+
+  function finalRelease() {
+    keys.clear(); pointer = null; releaseNeeded = true; closing = true;
+    try {
+      const body = JSON.stringify(newPacket({pressed:false, axes:[0,0,0,0,0,0]}));
+      const queued = navigator.sendBeacon?.("/api/input", new Blob([body], {type:"application/json"}));
+      if (!queued) void fetch("/api/input", {method:"POST", headers:{"Content-Type":"application/json"}, body, keepalive:true}).catch(() => {});
+    } catch (_) { /* The server's input lease remains the final boundary. */ }
+  }
+  window.addEventListener("pagehide", finalRelease);
+  window.addEventListener("beforeunload", finalRelease);
+  window.addEventListener("pageshow", () => {
+    closing = false; getHealthy = false; postHealthy = false;
+    keys.clear(); blockedKeys.clear(); releaseNeeded = true; releasedAcknowledged = false;
+    void pollState(); void sendInput(); render();
+  });
+  setInterval(() => {
+    if (getHealthy && !stateFresh()) { getHealthy = false; stopAll("反馈已过期，操作已释放"); }
+    void sendInput(); render();
+  }, HEARTBEAT_MS);
+  setInterval(() => void pollState(), STATE_PERIOD_MS);
+  render();
+  void pollState();
+  void sendInput();
+})();
+</script>
+</body>
+</html>

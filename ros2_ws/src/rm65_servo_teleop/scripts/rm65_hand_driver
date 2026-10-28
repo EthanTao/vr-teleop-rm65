@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+from rm65_servo_teleop.peripheral_nodes import main
+
+if __name__ == "__main__":
+    main("hand")
