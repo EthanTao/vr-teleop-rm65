@@ -1,6 +1,10 @@
 # ===== 生成物总闸 =====
-# 约定：所有生成物、缓存、临时目录、历史备份都只准落在 build/（见 README「根目录纪律」）。
+# 本机生成物、缓存、临时目录与环境备份统一放在 build/。
 build/
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+ros2_ws/vendor/
 dist/
 .tmp-wheel/
 *.egg-info/
@@ -20,7 +24,7 @@ venv/
 .htmlcov/
 .coverage
 # 兜底：沙箱里 tempfile 会退回仓库根，留下空的 tmpXXXXXXXX 目录。
-# 根因已由 tests/conftest.py 改道到 build/tmp/，这里只防再次出现。
+# 根目录 conftest.py 已改道到 build/tmp/，这里只防再次出现。
 /tmp*/
 
 # ===== 本机环境与编辑器 =====
@@ -31,7 +35,7 @@ venv/
 __MACOSX/
 
 # ===== 仅本机使用的快照与调研数据（不进版本库）=====
-# shared-dls 会读取的控制器 DH/工具帧快照，随现场标定变化
+# 历史控制器 DH/工具帧快照；保留本机数据，现行 Servo 不自动加载
 config/rm65_dls_calibration.json
 # 投稿调研的来源快照与辅助脚本（约 49 MB，保留在磁盘上）
 .ccf_research/
@@ -39,6 +43,11 @@ config/rm65_dls_calibration.json
 .codex/
 .superpowers/
 
-# ===== 启动器产生的缓存 =====
-# 正常情况下在系统临时目录；沙箱里会被 teleop.py 改道到 build/tmp/
+# ===== 历史启动器缓存，防止误纳入版本库 =====
 vr-teleop-rm65.manifest.json
+
+# ===== 本机交付物与 AI 工具缓存（保留磁盘，不纳入版本库）=====
+# 汇报成品与第三方依赖，约 229 MB，仅本机交付、不参与构建
+deliverables/
+# 本机 AI 工具的项目索引与缓存
+.serena/
