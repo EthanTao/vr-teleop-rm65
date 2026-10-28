@@ -5,8 +5,23 @@ logs/
 .venv
 *.egg-info
 .cursor
+.codex/
+.vscode/
+.idea/
+.superpowers/
+.env
 
 build/
 dist/
 .tmp-wheel/
 .pytest_cache/
+ros2_ws/vendor/
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+docs/
+config/
+scripts/
+tests_moveit/
+.agents/
+deliverables/

@@ -1,0 +1,11 @@
+# Local GUI overlay for the dedicated Windows WSLg simulation environment.
+# Software rendering needs no GPU/USB/robot device mapping or Docker Desktop.
+services:
+  servo:
+    environment:
+      DISPLAY: ":0"
+      QT_QPA_PLATFORM: xcb
+      QT_X11_NO_MITSHM: "1"
+      LIBGL_ALWAYS_SOFTWARE: "1"
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro

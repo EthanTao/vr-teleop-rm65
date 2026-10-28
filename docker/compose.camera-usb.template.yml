@@ -1,0 +1,7 @@
+# FIELD TEMPLATE ONLY: replace the path with the verified USB bus/device.
+# Use an RSUSB-compatible backend. UVC /dev/video* mappings depend on the host
+# kernel and actual SDK backend; verify them separately. Never add privileged.
+services:
+  peripherals:
+    devices:
+      - "${D435I_USB_DEVICE:?Set the verified /dev/bus/usb/BBB/DDD path}:${D435I_USB_DEVICE:?Set the verified USB path}"

@@ -1,0 +1,64 @@
+# One ROS2/MoveIt Servo stack. Build does not connect to or enable a robot.
+# Build from the repository root (the default includes only synthetic XR input):
+#   docker compose -f docker/compose.moveit.yml build
+FROM ros:humble-ros-base-jammy@sha256:566b87e6dfc48392189a9c32e594e84060fa9948de93b04e536f39475a1f6963 AS runtime-deps
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ENV CMAKE_BUILD_PARALLEL_LEVEL=2
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    build-essential cmake git curl ca-certificates iproute2 \
+    python3-colcon-common-extensions python3-rosdep python3-numpy python3-yaml \
+    python3-vcstool python3-pytest libeigen3-dev \
+    ros-humble-moveit ros-humble-moveit-servo \
+    ros-humble-ros2-control ros-humble-ros2-controllers \
+    ros-humble-topic-based-ros2-control ros-humble-foxglove-bridge \
+    ros-humble-ament-cmake-pytest ros-humble-launch-testing-ament-cmake \
+    ros-humble-xacro ros-humble-robot-state-publisher \
+    && mkdir -p /opt/rm65_ws/src /data/experiments \
+    && dpkg-query -W -f='${binary:Package}\t${Version}\n' \
+        > /opt/rm65-environment-packages.tsv \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/rm65_ws
+
+COPY ros2_ws/dependencies.repos /opt/rm65_ws/dependencies.repos
+RUN vcs import src < dependencies.repos
+COPY ros2_ws/patches /opt/rm65_ws/patches
+COPY ros2_ws/tools /opt/rm65_ws/tools
+RUN python3 tools/prepare_vendor.py --workspace /opt/rm65_ws
+RUN source /opt/ros/humble/setup.bash \
+    && colcon build --merge-install --packages-select rm_ros_interfaces rm_description rm_65_config rm_driver \
+        --cmake-args -DBUILD_TESTING=OFF
+FROM runtime-deps AS physics-deps
+# Keep the simulator below the unchanged vendor build layer. Both the C++
+# ros2_control interface and Python model validation use MuJoCo 3.12.0.
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    ros-humble-mujoco-ros2-control ros-humble-mujoco-vendor \
+    && python3 -m pip install --no-cache-dir 'numpy<2' 'mujoco==3.12.0' \
+    && dpkg-query -W -f='${binary:Package}\t${Version}\n' > /opt/rm65-environment-packages.tsv \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM physics-deps AS checked-physics-deps
+# Reject a repository update that silently pairs different C++ / Python engines.
+RUN python3 -c 'import ctypes,json,pathlib,mujoco; paths=list(pathlib.Path("/opt/ros/humble").rglob("libmujoco.so*")); assert paths,"MuJoCo vendor library missing"; lib=ctypes.CDLL(str(paths[0])); lib.mj_versionString.restype=ctypes.c_char_p; cpp=lib.mj_versionString().decode(); assert cpp==mujoco.__version__=="3.12.0",(cpp,mujoco.__version__); pathlib.Path("/opt/rm65-mujoco-versions.json").write_text(json.dumps({"cpp":cpp,"python":mujoco.__version__})); print("MuJoCo C++/Python:",cpp)'
+
+FROM checked-physics-deps AS runtime
+# Small 3x3/6x6 operations must not start one BLAS worker per CPU in every
+# Python ROS process. Keep resources available to source and TF callbacks.
+ENV OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+COPY docker/install_pc_service.sh /tmp/install_pc_service.sh
+ARG RM65_WITH_XR_SDK=OFF
+RUN if [[ "$RM65_WITH_XR_SDK" == "ON" ]]; then bash /tmp/install_pc_service.sh; fi
+COPY ros2_ws/src/rm65_servo_teleop /opt/rm65_ws/src/rm65_servo_teleop
+RUN source /opt/ros/humble/setup.bash \
+    && source install/setup.bash \
+    && colcon build --merge-install --packages-select rm65_servo_teleop \
+        --cmake-args -DBUILD_TESTING=ON -DRM65_WITH_XR_SDK=${RM65_WITH_XR_SDK}
+COPY docker/servo_entrypoint.sh /servo_entrypoint.sh
+RUN chmod +x /servo_entrypoint.sh
+ARG RM65_SOURCE_SHA=unknown
+LABEL org.rm65.source-sha="${RM65_SOURCE_SHA}" org.rm65.xr-sdk="${RM65_WITH_XR_SDK}"
+ENTRYPOINT ["/servo_entrypoint.sh"]
+# A plain container start idles. Only an explicit ros2 launch command starts the stack.
+CMD ["sleep", "infinity"]

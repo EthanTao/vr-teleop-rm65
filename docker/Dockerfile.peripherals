@@ -1,0 +1,20 @@
+# Build a separate image; no change to the running arm image or host libraries.
+ARG RM65_BASE_IMAGE=rm65-servo:humble
+FROM ${RM65_BASE_IMAGE}
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libusb-1.0-0 \
+    && dpkg-query -W -f='${binary:Package}\t${Version}\n' > /opt/rm65-peripheral-system-packages.tsv \
+    && rm -rf /var/lib/apt/lists/*
+COPY docker/requirements.camera.txt /opt/rm65-camera-requirements.txt
+ARG RM65_PIP_INDEX=https://pypi.org/simple
+RUN python3 -m pip install --no-cache-dir --timeout 30 --retries 2 --index-url "${RM65_PIP_INDEX}" --only-binary=:all: -r /opt/rm65-camera-requirements.txt \
+    && python3 -m pip freeze > /opt/rm65-camera-packages.txt \
+    && python3 -c 'import pyrealsense2 as rs; print("SDK import OK; devices:", len(rs.context().query_devices()))'
+COPY ros2_ws/src/rm65_servo_teleop /opt/rm65_ws/src/rm65_servo_teleop
+RUN source /opt/ros/humble/setup.bash && source /opt/rm65_ws/install/setup.bash \
+    && colcon build --merge-install --packages-select rm65_servo_teleop --cmake-args -DBUILD_TESTING=ON \
+    && chmod +x install/lib/rm65_servo_teleop/rm65_camera install/lib/rm65_servo_teleop/rm65_hand_driver
+# Explicit backend arguments are required. No tool-port connection on plain start.
+ARG RM65_PERIPHERALS_SHA=unknown
+LABEL org.rm65.source-sha="peripherals-only" org.rm65.peripherals-sha="${RM65_PERIPHERALS_SHA}"
+CMD ["sleep", "infinity"]

@@ -1,0 +1,18 @@
+# Standalone sidecars. Default mock camera, no robot or USB devices.
+services:
+  peripherals:
+    image: rm65-peripherals:prepared-20261028
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.peripherals
+      args:
+        RM65_BASE_IMAGE: ${RM65_BASE_IMAGE:-rm65-servo:humble}
+        RM65_PIP_INDEX: ${RM65_PIP_INDEX:-https://pypi.org/simple}
+    restart: "no"
+    network_mode: host
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+    volumes:
+      - ../build/experiments:/data/experiments:rw
+      - ../build/field:/field:ro
+    command: ["ros2", "launch", "rm65_servo_teleop", "peripherals.launch.py", "camera:=mock"]

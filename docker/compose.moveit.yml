@@ -1,0 +1,17 @@
+# One image and one launch: mode selects the simulated or guarded device interface.
+services:
+  servo:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.moveit
+    image: rm65-servo:humble
+    restart: "no"
+    stdin_open: true
+    tty: true
+    ports:
+      - "63901:63901/tcp"
+      - "8089:8089/udp"
+      - "127.0.0.1:8765:8765/tcp"
+      - "127.0.0.1:8766:8766/tcp"
+    volumes:
+      - ../build/experiments:/data/experiments:rw

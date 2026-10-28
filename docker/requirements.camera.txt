@@ -1,0 +1,3 @@
+# Validated separately on Python3.10/Linux x64. Firmware/USB remain field checks.
+numpy==1.26.4
+pyrealsense2==2.58.1.10581
