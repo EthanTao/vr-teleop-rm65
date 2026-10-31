@@ -20,6 +20,9 @@ def write_request(root: Path, token: str, *, now: float | None = None) -> Path:
     folder = root / ".sim-reset"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{token}.json"
+    # Windows exclusive creation can follow a dangling symlink to a new target.
+    if path.is_symlink():
+        raise ValueError("Simulation reset request must not be a symbolic link")
     stamp = time.time() if now is None else now
     if isinstance(stamp, bool) or not isinstance(stamp, (int, float)) or not math.isfinite(stamp):
         raise ValueError("Invalid reset request time")
