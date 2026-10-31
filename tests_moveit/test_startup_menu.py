@@ -666,7 +666,8 @@ def test_explicit_real_arguments_keep_existing_validation_path_on_tty(monkeypatc
 def test_root_entry_routes_cli_to_menu_without_starting_child(monkeypatch):
     dispatch = Mock(return_value=0)
     monkeypatch.setattr(launcher, "cli", dispatch)
+    monkeypatch.setattr("sys.argv", ["start.py", "--cli"])
     with pytest.raises(SystemExit) as raised:
-        runpy.run_path(str(ROOT / "启动.py"), run_name="__main__")
+        runpy.run_path(str(ROOT / "start.py"), run_name="__main__")
     assert raised.value.code == 0
-    dispatch.assert_called_once_with("menu")
+    dispatch.assert_called_once_with("menu", [])

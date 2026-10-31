@@ -6,20 +6,21 @@
 
 ## 开始使用
 
-Windows 需要 Python 3.10+、PyYAML。**日常先运行 `python 启动.py`**，按菜单选择：1 无手柄仿真、2 PICO 仿真、3 连接真机（只读）、4 正式执行、5 高级设置、0 退出。菜单仅编排现有 Servo 链，不恢复历史控制器；当前 [teleop.py](teleop.py) 仍是新 Servo 的薄入口。
+Windows 需要 Python 3.10+。**日常运行 `python start.py`，打开 RM65 Studio 桌面控制台**：左侧切换仿真实验、真机连接和连接设置，下方集中显示运行日志。界面采用开源 CustomTkinter，仍调用现有 Servo 链；窗口打开时不连接设备。
 
-| 入口 | 用途 |
+| 命令 | 用途 |
 | --- | --- |
-| [启动.py](启动.py) | 统一交互菜单；`--check-only` 仅打印菜单与连接说明，不提示输入、不查询环境或启动进程 |
-| [启动无手柄仿真.py](启动无手柄仿真.py) | `python 启动无手柄仿真.py`：MuJoCo + 浏览器键盘/按钮，不需要头显或机器人 |
-| [启动PICO仿真.py](启动PICO仿真.py) | `python 启动PICO仿真.py`：真实 PICO 输入，执行端仍为本机 MuJoCo |
-| [启动真机.py](启动真机.py) | 无参且在交互终端时显示真机子菜单：1 只读、2 反馈检查、3 PICO 输入检查、4 正式执行、5 高级设置、0 退出；非交互无参仍退出 2 |
+| `python start.py` | [统一桌面入口](start.py)：仿真启动、真机只读/查询、正式执行、连接设置和日志 |
+| `python start.py --cli` | 原终端交互菜单；`--check-only` 仅打印菜单和说明 |
+| `python start.py sim` | 无手柄仿真：MuJoCo + 浏览器键盘/按钮 |
+| `python start.py pico` | PICO 仿真：真实手柄输入，本机 MuJoCo 执行 |
+| `python start.py real` | 真机子菜单；非交互无参仍拒绝启动，显式参数与原准入条件相同 |
 
-推荐在项目根目录终端用 `python` 运行。Windows 双击 `.py` 依赖 Python 文件关联，不保证一键可用；经 Windows 资源管理器（Explorer）启动的 Python 独立控制台会在退出时等待 Enter 防止闪退，普通 CLI 默认不等待，也可用 `--pause` 显式等待退出按键。启动器显示阶段状态，日志保存到 `build/logs/startup/*.log`。
+首次安装桌面组件：`python -m pip install -e ".[desktop]"`。之后从项目根目录运行 `python start.py`，也可在正确的 Python 文件关联下双击 `start.py`。窗口中的“结束当前会话”向本次任务发送中断并等待退出，进程结束不代表实体停止已确认。桌面使用说明与开源选型见[桌面控制台](docs/桌面控制台.md)，启动日志保存在 `build/logs/startup/*.log`。
 
-原有三个同名 `.cmd` 和 `scripts/setup/start_simulation.ps1`、`start_real_robot.ps1` 保留为兼容转发入口，继续接受旧 PowerShell 参数（如 `-CheckOnly`、`-InputSource`、`-DryRun`、`-UdpIp`）；执行仍交给同一 Python / Servo 链。旧真机入口无参仍拒绝启动，不进入交互菜单。新调用建议使用上表的 Python 入口，兼容方式见[脚本索引](scripts/README.md)。
+按用户最新要求，已移除中文命名入口、旧 `.cmd` 和两个 PowerShell 快捷启动脚本，统一使用 `start.py`。网络助手 `connect_pico_wsl.ps1` 保留；`teleop.py` 继续承担底层控制栈命令行入口。
 
-通过两个 Python 仿真快捷入口启动后，聚焦 **MuJoCo 仿真窗口**并按 **R** 可重建仿真初始状态。旧控制图先完整退出，再启动新会话；重连后先松开 Grip。终端和浏览器内的 R 不触发该复位，Backspace 也不是此功能；真机不提供该复位。
+通过两个仿真模式启动后，聚焦 **MuJoCo 仿真窗口**并按 **R** 可重建仿真初始状态。旧控制图先完整退出，再启动新会话；重连后先松开 Grip。终端和浏览器内的 R 不触发该复位，Backspace 也不是此功能；真机不提供该复位。
 
 无手柄仿真启动后，点击终端显示的 [http://127.0.0.1:8766](http://127.0.0.1:8766) 打开控制台；入口不自动打开浏览器。按住 **Space + W/S、A/D、R/F** 平移，**Space + J/L、I/K、U/O** 旋转，或持续按住页面方向按钮。松开、失焦和断线撤销操作；完整按键、段限位和反馈说明见[操作手册](docs/仿真操作手册.md#2-无手柄控制台)。
 

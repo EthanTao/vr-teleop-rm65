@@ -8,7 +8,7 @@
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.venv\Scripts\python.exe -m pip install -e ".[dev,desktop]"
 .venv\Scripts\python.exe -X utf8 scripts/tools/check_repository.py
 ```
 

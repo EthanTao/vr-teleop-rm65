@@ -1,6 +1,6 @@
 # 项目工作规范
 
-PICO + XRoboToolkit → 侧装 RealMan RM65。**2026-10-25 用户决定用 MoveIt Servo 替换自研运动核心，并舍弃旧后端兼容。** 当前唯一入口是 `teleop.py` → `servo_launcher.py` → `ros2_ws/src/rm65_servo_teleop/launch/teleop.launch.py`。
+PICO + XRoboToolkit → 侧装 RealMan RM65。**2026-10-25 用户决定用 MoveIt Servo 替换自研运动核心，并舍弃旧后端兼容。** 日常统一使用 `start.py`（桌面控制台或显式模式）；底层运动链入口仍是 `teleop.py` → `servo_launcher.py` → `ros2_ws/src/rm65_servo_teleop/launch/teleop.launch.py`。
 
 Windows 本机仿真采用 WSL2 `RM65-Servo`（Ubuntu22.04 + Docker Engine），用户已授权必要时清旧环境后重建；旧 Ubuntu20.04 已备份并清理。ROS2 Humble 仍在同一 Docker 镜像内运行，真机使用板端执行。当前验证以[本机部署页](docs/本机仿真部署.md)和工作日志为准。
 

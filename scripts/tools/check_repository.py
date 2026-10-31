@@ -19,8 +19,10 @@ GENERATED = {"build", "install", "log", "vendor", "__pycache__"}
 LINK_DOCUMENTS = (
     "README.md",
     "CONTRIBUTING.md",
+    "THIRD_PARTY_NOTICES.md",
     "docs/README.md",
     "docs/仓库结构.md",
+    "docs/桌面控制台.md",
     "scripts/README.md",
     "ros2_ws/README.md",
     "ros2_ws/patches/README.md",

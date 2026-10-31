@@ -180,7 +180,7 @@ def run_menu(*, check_only: bool = False, real_only: bool = False) -> int:
                 return 0
             if not interactive_available():
                 raise ValueError(
-                    "菜单需要交互终端；自动化请使用带显式参数的三个快捷入口。--check-only 可离线查看菜单。"
+                    "菜单需要交互终端；自动化请使用 start.py sim/pico/real 并提供显式参数。--check-only 可离线查看菜单。"
                 )
             choice = input("选择编号：").strip()
             if choice in {"", "0"}:

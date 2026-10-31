@@ -220,32 +220,34 @@ def test_mock_demo_remains_on_existing_teleop_cli(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "name,kind", [("启动无手柄仿真.py", "manual"), ("启动PICO仿真.py", "pico"), ("启动真机.py", "real")]
+    "mode,kind", [("sim", "manual"), ("pico", "pico"), ("real", "real")]
 )
-def test_root_python_entries_forward_kind_and_exit_code(monkeypatch, name, kind):
+def test_single_root_entry_forwards_mode_arguments_and_exit_code(monkeypatch, mode, kind):
     cli = Mock(return_value=23)
     monkeypatch.setattr(launcher, "cli", cli)
+    monkeypatch.setattr(sys, "argv", ["start.py", mode, "--check-only"])
     with pytest.raises(SystemExit) as exc:
-        runpy.run_path(str(ROOT / name), run_name="__main__")
+        runpy.run_path(str(ROOT / "start.py"), run_name="__main__")
     assert exc.value.code == 23
-    cli.assert_called_once_with(kind)
+    cli.assert_called_once_with(kind, ["--check-only"])
 
 
-def test_python_entries_and_legacy_compatibility_launchers_remain_available():
-    for name in ("启动无手柄仿真.py", "启动PICO仿真.py", "启动真机.py"):
-        assert (ROOT / name).is_file()
+def test_only_english_daily_entry_remains_and_network_helper_is_preserved():
+    assert (ROOT / "start.py").is_file()
+    for name in ("启动.py", "启动无手柄仿真.py", "启动PICO仿真.py", "启动真机.py"):
+        assert not (ROOT / name).exists()
     for name in ("start_simulation.ps1", "start_real_robot.ps1"):
-        assert (ROOT / "scripts/setup" / name).is_file()
+        assert not (ROOT / "scripts/setup" / name).exists()
     for name in ("启动无手柄仿真.cmd", "启动PICO仿真.cmd", "启动真机.cmd"):
-        assert (ROOT / name).is_file()
+        assert not (ROOT / name).exists()
     assert (ROOT / "scripts/setup/connect_pico_wsl.ps1").is_file()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Actual WSL preview requires a Windows drive root")
-@pytest.mark.parametrize("name,source", [("启动无手柄仿真.py", "manual"), ("启动PICO仿真.py", "pico")])
-def test_actual_python_sim_cli_check_only_from_other_cwd(tmp_path, name, source):
+@pytest.mark.parametrize("mode,source", [("sim", "manual"), ("pico", "pico")])
+def test_actual_python_sim_cli_check_only_from_other_cwd(tmp_path, mode, source):
     result = subprocess.run(
-        [sys.executable, "-B", str(ROOT / name), "--check-only"],
+        [sys.executable, "-B", str(ROOT / "start.py"), mode, "--check-only"],
         cwd=tmp_path,
         capture_output=True,
         text=True,

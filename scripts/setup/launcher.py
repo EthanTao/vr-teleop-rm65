@@ -400,7 +400,7 @@ def owns_console() -> bool:
         return False
 
 
-def cli(kind: str) -> int:
+def cli(kind: str, argv: Sequence[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
@@ -416,12 +416,13 @@ def cli(kind: str) -> int:
         LOGGER.setLevel(logging.INFO)
     except OSError as exc:
         print(f"[警告] 无法创建诊断日志：{exc}", flush=True)
-    pause = "--pause" in sys.argv[1:] or owns_console()
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    pause = "--pause" in arguments or owns_console()
     try:
         if log_path and handler:
             status(f"[日志] 启动阶段与异常（子进程实时输出仍在终端）：{log_path}")
         try:
-            result = main(kind)
+            result = main(kind) if argv is None else main(kind, arguments)
         except SystemExit as exc:
             result = int(exc.code or 0)
         if result == 0:

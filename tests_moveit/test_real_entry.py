@@ -13,7 +13,7 @@ import servo_launcher
 from scripts.setup import launcher
 
 ROOT = Path(__file__).resolve().parents[1]
-ENTRY = ROOT / "启动真机.py"
+ENTRY = ROOT / "start.py"
 UDP = ["--udp-ip", "192.0.2.20"]
 LIVE = [*UDP, "--hardware-validation", "test-only.yaml", "--live-ack", "RM65 LIVE VALIDATION"]
 TEMPLATE = "ros2_ws/src/rm65_servo_teleop/config/hardware_validation.example.yaml"
@@ -27,7 +27,7 @@ def run_entry(tmp_path, options):
     # This subprocess launches only Python itself. --check-only is independently
     # tested in-process with subprocess.run and network calls replaced by failures.
     return subprocess.run(
-        [sys.executable, "-B", str(ENTRY), *options],
+        [sys.executable, "-B", str(ENTRY), "real", *options],
         cwd=tmp_path,
         input="",
         capture_output=True,

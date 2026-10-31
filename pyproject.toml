@@ -12,6 +12,7 @@ license = {text = "MIT"}
 dependencies = ["numpy", "PyYAML"]
 
 [project.optional-dependencies]
+desktop = ["customtkinter==6.0.0"]
 dev = ["pytest>=7,<10", "black>=24,<27", "ruff==0.11.13"]
 vision = ["numpy==1.26.4; python_version < '3.13'", "pyrealsense2==2.58.1.10581"]
 
