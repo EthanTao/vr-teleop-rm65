@@ -62,7 +62,7 @@ def test_simulator_choice_cannot_modify_hardware_mode(monkeypatch):
     )
 
 
-def test_explicit_mock_uses_same_servo_launch_without_mujoco_window(capsys):
+def test_explicit_mock_uses_same_servo_launch_without_mujoco_window(capsys, wsl_root):
     assert (
         servo_launcher.main(
             ["--mode", "sim", "--target", "wsl", "--simulator", "mock", "--no-viewer", "--print-command"]
@@ -75,7 +75,7 @@ def test_explicit_mock_uses_same_servo_launch_without_mujoco_window(capsys):
 
 
 @pytest.mark.parametrize("input_source", ["manual", "mock", "pico"])
-def test_rviz_only_opens_when_explicitly_requested(input_source, capsys):
+def test_rviz_only_opens_when_explicitly_requested(input_source, capsys, wsl_root):
     assert (
         servo_launcher.main(["--mode", "sim", "--target", "wsl", "--input", input_source, "--rviz", "--print-command"])
         == 0
@@ -111,7 +111,7 @@ def test_manual_input_is_simulation_only_and_fails_before_any_process(monkeypatc
 
 
 @pytest.mark.parametrize("input_source,sdk", [("manual", "OFF"), ("pico", "ON"), ("mock", "OFF")])
-def test_simulation_input_changes_only_the_source_and_sdk(monkeypatch, capsys, input_source, sdk):
+def test_simulation_input_changes_only_the_source_and_sdk(monkeypatch, capsys, input_source, sdk, wsl_root):
     monkeypatch.setattr(servo_launcher.subprocess, "run", lambda *a, **k: pytest.fail("preview ran process"))
     assert servo_launcher.main(["--mode", "sim", "--target", "wsl", "--input", input_source, "--print-command"]) == 0
     output = capsys.readouterr().out
