@@ -43,7 +43,21 @@ FROM physics-deps AS checked-physics-deps
 # Reject a repository update that silently pairs different C++ / Python engines.
 RUN python3 -c 'import ctypes,json,pathlib,mujoco; paths=list(pathlib.Path("/opt/ros/humble").rglob("libmujoco.so*")); assert paths,"MuJoCo vendor library missing"; lib=ctypes.CDLL(str(paths[0])); lib.mj_versionString.restype=ctypes.c_char_p; cpp=lib.mj_versionString().decode(); assert cpp==mujoco.__version__=="3.12.0",(cpp,mujoco.__version__); pathlib.Path("/opt/rm65-mujoco-versions.json").write_text(json.dumps({"cpp":cpp,"python":mujoco.__version__})); print("MuJoCo C++/Python:",cpp)'
 
-FROM checked-physics-deps AS runtime
+FROM checked-physics-deps AS reset-physics-deps
+# Window R emits a simulation-session request, never reset_world/mj_resetData.
+COPY ros2_ws/patches/mujoco_session_reset.patch /tmp/mujoco_session_reset.patch
+RUN git clone --depth 1 --branch 0.1.2 https://github.com/ros-controls/mujoco_ros2_control.git /tmp/rm65-mujoco-reset \
+    && test "$(git -C /tmp/rm65-mujoco-reset rev-parse HEAD)" = 178b1c39e5010185116bc89b4e94cbb25b825f61 \
+    && git -C /tmp/rm65-mujoco-reset apply --check /tmp/mujoco_session_reset.patch \
+    && git -C /tmp/rm65-mujoco-reset apply /tmp/mujoco_session_reset.patch \
+    && source /opt/ros/humble/setup.bash \
+    && cd /tmp/rm65-mujoco-reset \
+    && colcon build --base-paths mujoco_ros2_control --merge-install --install-base /opt/ros/humble \
+        --packages-select mujoco_ros2_control \
+        --cmake-args -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release \
+    && rm -rf /tmp/rm65-mujoco-reset /tmp/mujoco_session_reset.patch
+
+FROM reset-physics-deps AS runtime
 # Small 3x3/6x6 operations must not start one BLAS worker per CPU in every
 # Python ROS process. Keep resources available to source and TF callbacks.
 ENV OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1

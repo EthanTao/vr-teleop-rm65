@@ -183,9 +183,10 @@ def main(args=None) -> None:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
-    except _rclpy.RCLError:
+    except (_rclpy.RCLError, RuntimeError):
         # A signal can invalidate the context between a callback's checks and
-        # publish(). Keep actual middleware failures fatal while ROS is alive.
+        # publish()/take_message(). Humble can report either exception type.
+        # Keep actual middleware failures fatal while ROS is alive.
         if rclpy.ok():
             raise
     finally:

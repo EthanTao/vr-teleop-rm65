@@ -1,0 +1,101 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -58,6 +58,10 @@ set(MUJOCO_INSTALL_SIMULATE_DIR "${MUJOCO_SIMULATE_DIR}")
+ 
+ # Fetch lodepng dependency, if not available
+ find_package(lodepng QUIET)
++# RM65 viewer-only patch: reuse the vendor's installed, version-matched library.
++if(TARGET lodepng::lodepng AND NOT TARGET lodepng)
++  add_library(lodepng ALIAS lodepng::lodepng)
++endif()
+ if(NOT TARGET lodepng)
+   include(FetchContent)
+   if(NOT DEFINED MUJOCO_DEP_VERSION_lodepng)
+diff --git a/include/mujoco_ros2_control/mujoco_simulation.hpp b/include/mujoco_ros2_control/mujoco_simulation.hpp
+--- a/include/mujoco_ros2_control/mujoco_simulation.hpp
++++ b/include/mujoco_ros2_control/mujoco_simulation.hpp
+@@ -20,5 +20,6 @@
+ 
+ #include <atomic>
++#include <chrono>
+ #include <condition_variable>
+ #include <functional>
+ #include <memory>
+@@ -46,5 +47,6 @@
+ #include <mujoco_ros2_control_plugins/mujoco_ros2_control_plugins_base.hpp>
+ #include <sensor_msgs/msg/joint_state.hpp>
++#include <std_msgs/msg/string.hpp>
+ 
+ namespace mujoco_ros2_control
+ {
+@@ -451,6 +453,14 @@ private:
+   // ROS node (owned by the HW interface, used here for services and clock publisher).
+   rclcpp::Node::SharedPtr node_;
+ 
++  // RM65 viewer-only text. Never reads or writes physics/control state.
++  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr tcp_overlay_subscription_;
++  std::mutex tcp_overlay_mutex_;
++  std::string tcp_overlay_text_{ "SIM TCP: waiting for observer" };
++  std::chrono::steady_clock::time_point tcp_overlay_received_{};
++  // Written/read only by the existing single display producer.
++  std::string tcp_overlay_display_{ "SIM TCP: waiting for observer" };
++
+   // System information
+   std::string model_path_;
+   std::string mujoco_model_topic_;
+diff --git a/src/mujoco_simulation.cpp b/src/mujoco_simulation.cpp
+--- a/src/mujoco_simulation.cpp
++++ b/src/mujoco_simulation.cpp
+@@ -535,6 +535,29 @@ bool MujocoSimulation::initialize(rclcpp::Node::SharedPtr node, const std::string& model_path,
+   mujoco_model_topic_ = mujoco_model_topic;
+   sim_speed_factor_ = sim_speed_factor;
+   headless_ = headless;
++
++  // RM65 viewer-only patch. Bounded ASCII text is handed to the native renderer
++  // through its existing lock-free display queue, never through a second viewer.
++  if (!headless_)
++  {
++    tcp_overlay_subscription_ = node_->create_subscription<std_msgs::msg::String>(
++        "/rm65/sim/tcp_overlay", rclcpp::QoS(1).best_effort(),
++        [this](std_msgs::msg::String::ConstSharedPtr message) {
++          const auto& value = message->data;
++          bool valid = value.size() <= 1536;
++          for (unsigned char character : value)
++          {
++            if (character != '\n' && (character < 32 || character > 126))
++            {
++              valid = false;
++              break;
++            }
++          }
++          std::lock_guard<std::mutex> lock(tcp_overlay_mutex_);
++          tcp_overlay_text_ = valid ? value : "SIM TCP: INVALID overlay text";
++          tcp_overlay_received_ = std::chrono::steady_clock::now();
++        });
++  }
+ 
+   if (sim_speed_factor_ > 0)
+   {
+@@ -1714,6 +1737,21 @@ void MujocoSimulation::update_sim_display()
+ 
+   sim_->user_texts_new_.clear();
+   sim_->user_texts_new_.emplace_back(mjFONT_NORMAL, mjGRID_TOPRIGHT, title, content);
++
++  // Never wait on a ROS callback from the physics/display producer. A missed
++  // snapshot is shown as busy instead of being misrepresented as fresh data.
++  {
++    std::unique_lock<std::mutex> lock(tcp_overlay_mutex_, std::try_to_lock);
++    if (!lock.owns_lock())
++      tcp_overlay_display_ = "SIM TCP: overlay snapshot busy";
++    else if (tcp_overlay_received_ == std::chrono::steady_clock::time_point{})
++      tcp_overlay_display_ = "SIM TCP: waiting for observer";
++    else if (std::chrono::steady_clock::now() - tcp_overlay_received_ > std::chrono::seconds(1))
++      tcp_overlay_display_ = "SIM TCP: STALE (observer missing >1s)";
++    else
++      tcp_overlay_display_ = tcp_overlay_text_;
++  }
++  sim_->user_texts_new_.emplace_back(mjFONT_NORMAL, mjGRID_TOPLEFT, tcp_overlay_display_, "");
+ 
+   // Publish only after the vector is fully written; the release store pairs with
+   // the render thread's load.

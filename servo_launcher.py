@@ -189,6 +189,14 @@ def source_archive() -> bytes:
 
 def validate_options(args) -> None:
     args.target = resolve_target(args)
+    token = getattr(args, "sim_reset_token", "")
+    if token and (
+        not re.fullmatch(r"[0-9a-f]{32}", token)
+        or args.mode != "sim"
+        or args.target not in {"wsl", "local"}
+        or args.model_only
+    ):
+        raise ValueError("仿真复位令牌仅用于本机 sim 会话，不能用于真机、远程或模型预览")
     if args.hand != "off" and args.mode != "sim":
         raise ValueError("--hand mock 仅供 sim 离线演练；真实手控制尚未现场验收")
     if args.rviz and (args.target != "wsl" or args.mode != "sim" or not args.viewer):
@@ -294,6 +302,8 @@ def commands(args, *, source_sha: str | None = None) -> list[list[str]]:
             "rm65-servo",
             "-e",
             f"RM65_START_XR_SERVICE={'1' if args.input == 'pico' and not args.model_only else '0'}",
+            *(["-e", f"RM65_SIM_RESET_TOKEN={args.sim_reset_token}", "--label", f"org.rm65.sim-session={args.sim_reset_token}"]
+              if getattr(args, "sim_reset_token", "") else []),
             "servo",
             *launch,
         ]
@@ -378,6 +388,7 @@ def main(argv=None) -> int:
     parser.add_argument("--live-ack", default="")
     parser.add_argument("--model-only", action="store_true", help="只输出模型与部署哈希，不启动任何ROS节点")
     parser.add_argument("--print-command", action="store_true", help="仅打印将使用的命令，不同步或启动")
+    parser.add_argument("--sim-reset-token", default="", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
         return run(args)

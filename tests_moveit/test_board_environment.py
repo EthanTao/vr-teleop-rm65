@@ -40,6 +40,33 @@ def test_reuse_does_not_launch_or_restart(monkeypatch, session):
     board.start_readonly(["docker"], PurePosixPath("/home/rm/EthanTao"))
 
 
+def test_custom_controller_route_and_launch_match_requested_addresses(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(board, "inspect_container", lambda _: None)
+
+    def execute(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(stdout='[{"prefsrc":"192.0.2.100"}]' if command[0] == "ip" else "")
+
+    monkeypatch.setattr(board, "execute", execute)
+    board.start_readonly(["docker"], tmp_path, arm_ip="192.0.2.18", udp_ip="192.0.2.100")
+    assert calls[0] == ["ip", "-j", "route", "get", "192.0.2.18"]
+    assert "arm_ip:=192.0.2.18" in calls[-1] and "udp_ip:=192.0.2.100" in calls[-1]
+    assert "mode:=hardware-dry-run" in calls[-1]
+
+
+def test_custom_addresses_refuse_reuse_of_a_different_controller(monkeypatch, session):
+    monkeypatch.setattr(board, "inspect_container", lambda _: session)
+    monkeypatch.setattr(board, "execute", lambda *a, **k: pytest.fail("mismatched session disturbed"))
+    with pytest.raises(RuntimeError, match="refusing"):
+        board.start_readonly(
+            ["docker"],
+            PurePosixPath("/home/rm/EthanTao"),
+            arm_ip="192.0.2.18",
+            udp_ip="192.0.2.100",
+        )
+
+
 @pytest.mark.parametrize("change", ["live", "override", "stopped", "workspace", "input"])
 def test_unrecognized_session_is_preserved_and_refused(monkeypatch, session, change):
     if change == "live":

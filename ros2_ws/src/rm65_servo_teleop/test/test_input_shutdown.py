@@ -11,7 +11,7 @@ import pytest
 @pytest.mark.parametrize("module_name", ["xr_node", "mock_xr", "journal_node"])
 @pytest.mark.parametrize(
     "interruption,context_alive",
-    [("keyboard", True), ("external", False), ("external", True), ("error", True), ("rcl", False), ("rcl", True)],
+    [("keyboard", True), ("external", False), ("external", True), ("error", True), ("error", False), ("rcl", False), ("rcl", True)],
 )
 def test_input_entrypoint_context_shutdown_is_normal_and_cleanup_always_runs(
     monkeypatch, module_name, interruption, context_alive
@@ -118,7 +118,7 @@ def test_input_entrypoint_context_shutdown_is_normal_and_cleanup_always_runs(
     if module_name == "journal_node":
         writer = SimpleNamespace(path="fake-journal", close=lambda: events.append("journal_close"))
         monkeypatch.setattr(module, "JournalWriter", lambda *args, **kwargs: writer)
-    if interruption == "error" or (interruption == "rcl" and context_alive):
+    if (interruption == "error" and (context_alive or module_name != "xr_node")) or (interruption == "rcl" and context_alive):
         with pytest.raises((RuntimeError, RCLError), match="test context interruption"):
             module.main()
     else:

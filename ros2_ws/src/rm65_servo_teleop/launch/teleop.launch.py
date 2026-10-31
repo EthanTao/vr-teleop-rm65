@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import hashlib
+import os
+import re
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -280,6 +282,22 @@ def _setup(context):
         after_controller.insert(0, guard)
         extra_critical.append(guard)
         actions.append(simulation_cleanup)
+    token = os.environ.get("RM65_SIM_RESET_TOKEN", "")
+    if token:
+        if not use_mujoco or not re.fullmatch(r"[0-9a-f]{32}", token):
+            raise ValueError("Owned simulation reset is only valid for MuJoCo simulation")
+        reset = Node(
+            package="rm65_servo_teleop",
+            executable="rm65_simulation_reset",
+            output="screen",
+            parameters=[{
+                "simulation_only": True,
+                "record_root": LaunchConfiguration("record_root").perform(context),
+                "use_sim_time": False,
+            }],
+        )
+        after_controller.append(reset)
+        extra_critical.append(reset)
     device_nodes = []
     if mode != "sim":
         driver_topics = [

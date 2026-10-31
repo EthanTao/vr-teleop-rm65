@@ -125,6 +125,9 @@ class TestHandGraph(unittest.TestCase):
             buttons(0.12, grip=1.0)
             buttons(0.15)  # Releasing Grip does not release the object.
             wait(lambda: statuses[-1]["stage"] == "inserting")
+            # Status and event topics have independent DDS delivery queues.
+            # Observe prepare/grasp sends before checking that rejection adds none.
+            wait(lambda: len([row for row in events if row["kind"] == "sent"]) == 2)
             before = len([row for row in events if row["kind"] == "sent"])
             status = statuses[-1]
             request = {
@@ -148,6 +151,7 @@ class TestHandGraph(unittest.TestCase):
             buttons(1.3, b=True)
             buttons(1.0)
             wait(lambda: statuses[-1]["stage"] == "released")
+            wait(lambda: len([row for row in events if row["kind"] == "sent"]) == 3)
             self.assertTrue(statuses[-1]["synthetic"])
             self.assertFalse(statuses[-1]["hardware_writes"])
             self.assertFalse(statuses[-1]["arm_motion_authorized"])

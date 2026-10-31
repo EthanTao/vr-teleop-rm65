@@ -139,7 +139,7 @@ def inventory(container: str, allow_sudo: bool) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ssh-host", default="rm", help="SSH alias of the Linux board")
-    parser.add_argument("--container", default="xrobo-vr-teleop")
+    parser.add_argument("--container", default="rm65-servo")
     parser.add_argument(
         "--sudo-docker", action="store_true", help="Try read-only sudo -n docker after plain Docker fails"
     )

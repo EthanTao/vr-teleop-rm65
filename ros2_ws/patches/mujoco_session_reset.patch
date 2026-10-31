@@ -1,0 +1,88 @@
+diff --git a/mujoco_ros2_control/CMakeLists.txt b/mujoco_ros2_control/CMakeLists.txt
+index b8b0dda..ff39f95 100644
+--- a/mujoco_ros2_control/CMakeLists.txt
++++ b/mujoco_ros2_control/CMakeLists.txt
+@@ -58,6 +58,9 @@ set(MUJOCO_INSTALL_SIMULATE_DIR "${MUJOCO_SIMULATE_DIR}")
+ 
+ # Fetch lodepng dependency, if not available
+ find_package(lodepng QUIET)
++if(TARGET lodepng::lodepng AND NOT TARGET lodepng)
++  add_library(lodepng ALIAS lodepng::lodepng)
++endif()
+ if(NOT TARGET lodepng)
+   include(FetchContent)
+   if(NOT DEFINED MUJOCO_DEP_VERSION_lodepng)
+diff --git a/mujoco_ros2_control/src/mujoco_simulation.cpp b/mujoco_ros2_control/src/mujoco_simulation.cpp
+index ef23ea9..6f427a0 100644
+--- a/mujoco_ros2_control/src/mujoco_simulation.cpp
++++ b/mujoco_ros2_control/src/mujoco_simulation.cpp
+@@ -32,6 +32,7 @@
+ #include <filesystem>
+ #include <fstream>
+ #include <future>
++#include <functional>
+ #include <iostream>
+ #include <memory>
+ #include <new>
+@@ -40,6 +41,7 @@
+ #include <thread>
+ 
+ #include <std_msgs/msg/string.hpp>
++#include <std_msgs/msg/empty.hpp>
+ 
+ #include <hardware_interface/version.h>
+ #include <rclcpp/version.h>
+@@ -194,13 +196,25 @@ public:
+ class ROS2ControlGlfwAdapter : public mj::GlfwAdapter
+ {
+ public:
+-  explicit ROS2ControlGlfwAdapter(std::atomic<bool>& step_requested) : step_requested_(step_requested)
++  explicit ROS2ControlGlfwAdapter(std::atomic<bool>& step_requested, std::function<void()> session_reset = {})
++    : step_requested_(step_requested), session_reset_(std::move(session_reset))
+   {
+   }
+ 
+ protected:
+   void OnKey(int key, int scancode, int act) override
+   {
++    // R closes an owned RM65 simulation graph; it never resets live physics
++    // underneath the controllers. Suppress key-repeat until the graph exits.
++    if (session_reset_ && key == GLFW_KEY_R)
++    {
++      if (act == GLFW_PRESS && !reset_requested_)
++      {
++        reset_requested_ = true;
++        session_reset_();
++      }
++      return;
++    }
+     // Intercept the right arrow key so only the ROS loop advances the physics,
+     // preventing double-stepping (MuJoCo's native handler would also call mj_step).
+     if (key == GLFW_KEY_RIGHT)
+@@ -218,6 +232,8 @@ protected:
+ 
+ private:
+   std::atomic<bool>& step_requested_;
++  std::function<void()> session_reset_;
++  bool reset_requested_{ false };  // UI-thread local, not physics state.
+ };
+ 
+ // return the path to the directory containing the current executable
+@@ -580,7 +596,16 @@ bool MujocoSimulation::initialize(rclcpp::Node::SharedPtr node, const std::strin
+   {
+     // Launch the UI loop in the background
+     ui_thread_ = std::thread([this, sim_ready]() {
+-      sim_ = std::make_unique<mj::Simulate>(std::make_unique<ROS2ControlGlfwAdapter>(keyboard_step_requested_), &cam_,
++      std::function<void()> session_reset;
++      const char* token = std::getenv("RM65_SIM_RESET_TOKEN");
++      if (token && std::string(token).size() == 32 && std::string(token).find_first_not_of("0123456789abcdef") == std::string::npos)
++      {
++        // Retain a press made before the reset observer finishes starting.
++        auto publisher = node_->create_publisher<std_msgs::msg::Empty>(
++            "/rm65/simulation/reset_request", rclcpp::QoS(1).transient_local());
++        session_reset = [publisher]() { publisher->publish(std_msgs::msg::Empty{}); };
++      }
++      sim_ = std::make_unique<mj::Simulate>(std::make_unique<ROS2ControlGlfwAdapter>(keyboard_step_requested_, session_reset), &cam_,
+                                             &opt_, &pert_,
+                                             /* is_passive = */ false);
+ 

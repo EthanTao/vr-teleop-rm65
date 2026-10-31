@@ -54,15 +54,15 @@ Dockerfile 获取固定上游，校验提交、应用补丁、按 x64/ARM64 放�
 
 默认未安装 XR 原生 SDK；`--input pico` 的启动器将构建参数切到 ON。测试容器无网络/设备映射，不启动 `rm_driver`。默认仿真为 MuJoCo 动力学反馈；不能验证实体停止、真实接触力、网络延迟或采集同步。物理参数见 [mujoco.yaml](src/rm65_servo_teleop/config/mujoco.yaml)，当前未实机辨识，假设理想重力补偿。
 
-Windows 根目录提供三个明确入口，无选择菜单：
+Windows 根目录可从 `python 启动.py` 进入统一菜单，也保留三个直接入口：
 
 | 入口 | 路由 |
 | --- | --- |
-| `启动无手柄仿真.cmd` | `teleop.py --mode sim --target wsl --input manual` |
-| `启动PICO仿真.cmd` | 同一 sim/WSL 入口，输入改为 pico |
-| `启动真机.cmd` | 既有 remote hardware 链，须显式现场参数与人工准入 |
+| `python 启动无手柄仿真.py` | `teleop.py --mode sim --target wsl --input manual` |
+| `python 启动PICO仿真.py` | 同一 sim/WSL 入口，输入改为 pico |
+| `python 启动真机.py` | 交互终端无参进入真机子菜单；显式参数走既有 remote hardware 链，正式执行仍须现场参数与人工准入 |
 
-PowerShell `start_simulation.ps1` 默认 manual，接受 `-InputSource manual|pico|mock`；仅 PICO 模式准备本项目 TCP63901 转发，`-CheckOnly` 只预览。CLI mock 保留一次约15秒的小幅自动演示后释放 Grip，用于离线演示/验收，不是第四个双击入口；CLI 省略输入仍默认 mock。
+三入口共用 [Python 启动编排](../scripts/setup/launcher.py)，无手柄入口明确 manual；仅实际执行 PICO 模式准备本项目 TCP63901 转发，专用 PowerShell 网络助手保留。`--check-only` 只离线预览，不启动 WSL、不枚举网卡或提权。CLI mock 保留一次约15秒的小幅自动演示后释放 Grip，用于离线演示/验收，不是第四个双击入口；CLI 省略输入仍默认 mock。
 
 manual 服务位于 [http://127.0.0.1:8766](http://127.0.0.1:8766)，启动器仅打印地址，待就绪后自行点击。Space + W/S、A/D、R/F 对应 ±X/Y/Z，Space + J/L、I/K、U/O 对应 ±RX/RY/RZ，或按住页面方向按钮。方向在 `base_link` 中定义；输入目标速率20 mm/s和0.12 rad/s，单段偏移10 cm/0.16 rad到限后须松开重按。松开、失焦、页面隐藏和断线撤销操作，恢复后不自动续动。控制台显示 MuJoCo 实际 q/dq、反馈 TCP、目标、误差、状态和数据年龄；实际仿真反馈不等于实体测量。详见[操作手册](../docs/仿真操作手册.md#2-无手柄控制台)。
 
@@ -77,7 +77,7 @@ PICO 的 PC Service 由容器直接管理前台进程，等待 TCP63901 和本�
 - `hardware-dry-run`：实际连接官方 SDK 读反馈，原生运动权限关闭，不创建执行服务和命令订阅；桥接层亦不创建执行客户端。
 - `hardware`：只有现场检查文件、部署哈希、明确操作口令均通过才给原生执行权限；反馈、停止和 Grip 仍独立门控。
 
-manual 和 mock 均禁止用于 hardware / hardware-dry-run。`启动真机.cmd` 无参列缺项后退出，不连接、同步或部署；正式执行必须显式 `-UdpIp`、有效 `-HardwareValidation` 与人工 `-LiveAck "RM65 LIVE VALIDATION"`，不会生成或批准现场证据。`-CheckOnly` 仅验证参数并预览；`-DryRun` 仍须显式 UdpIp，实际启动会连接真实控制器读反馈。
+manual 和 mock 均禁止用于 hardware / hardware-dry-run。`python 启动真机.py` 在交互终端无参进入子菜单，非交互无参列缺项后退出；正式执行必须显式 `--udp-ip`、有效 `--hardware-validation` 与人工 `--live-ack "RM65 LIVE VALIDATION"`，不会生成或批准现场证据。`--check-only` 仅验证参数并预览；`--dry-run` 仍须显式 `--udp-ip`，实际启动会连接真实控制器读反馈。原有 `.cmd` / PowerShell 入口保留参数兼容转发，旧真机入口无参仍退出 2。
 
 握持新段始于实测 TCP。故障后先释放 Grip，反馈新鲜无错、六轴静止且停止确认满足后才重使能。原生代次屏蔽停止前在途指令；桥断连与 UDP 超时由原生 watchdog 覆盖。
 

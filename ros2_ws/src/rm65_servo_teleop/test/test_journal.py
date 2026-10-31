@@ -2,6 +2,7 @@
 
 import json
 import math
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,7 @@ from rm65_servo_teleop.journal_node import (
     normalize_diagnostic_values,
     required_topics_for_mode,
 )
+from rm65_servo_teleop import journal_node
 
 MODES = ("sim", "hardware-dry-run", "hardware")
 
@@ -22,6 +24,76 @@ def metadata(writer):
 def fill_coverage(writer, *, omit=()):
     for topic in sorted(writer.required_topics - set(omit)):
         assert writer.append(topic, {"fixture": "topic-presence-only"})
+
+
+def windows_replace_error(code):
+    error = PermissionError("injected Windows file conflict")
+    error.winerror = code
+    return error
+
+
+@pytest.mark.parametrize("code", [5, 32, 33])
+def test_metadata_atomic_replace_recovers_from_transient_windows_conflict(tmp_path, monkeypatch, code):
+    source, target = tmp_path / "metadata.tmp", tmp_path / "metadata.json"
+    source.write_text('{"new": true}', encoding="utf-8")
+    target.write_text('{"old": true}', encoding="utf-8")
+    original = Path.replace
+    attempts, sleeps = [], []
+
+    def replace(path, destination):
+        attempts.append(path)
+        if len(attempts) <= 2:
+            assert json.loads(target.read_text()) == {"old": True}
+            raise windows_replace_error(code)
+        return original(path, destination)
+
+    monkeypatch.setattr(Path, "replace", replace)
+    monkeypatch.setattr(journal_node.time, "sleep", sleeps.append)
+    journal_node.replace_metadata_file(source, target)
+    assert json.loads(target.read_text()) == {"new": True}
+    assert not source.exists() and len(attempts) == 3 and len(sleeps) == 2
+
+
+def test_persistent_metadata_conflict_preserves_evidence_and_close_can_retry(tmp_path, monkeypatch):
+    writer = JournalWriter(tmp_path, mode="sim")
+    fill_coverage(writer)
+    old_metadata = (writer.path / "session.json").read_bytes()
+    attempts = []
+    original = Path.replace
+
+    def denied(path, destination):
+        attempts.append(path)
+        raise windows_replace_error(5)
+
+    monkeypatch.setattr(Path, "replace", denied)
+    monkeypatch.setattr(journal_node.time, "sleep", lambda _: None)
+    with pytest.raises(PermissionError):
+        writer.close()
+    assert len(attempts) == 6
+    assert (writer.path / "session.json").read_bytes() == old_metadata
+    assert (writer.path / "session.json.tmp").is_file()
+    assert not writer.append("/joint_states", {})
+    monkeypatch.setattr(Path, "replace", original)
+    writer.close()
+    assert metadata(writer)["complete"]
+
+
+@pytest.mark.parametrize("error", [PermissionError("non-Windows permission failure"), OSError("disk failure")])
+def test_other_metadata_errors_are_not_retried(tmp_path, monkeypatch, error):
+    source, target = tmp_path / "metadata.tmp", tmp_path / "metadata.json"
+    source.write_text("new", encoding="utf-8")
+    target.write_text("old", encoding="utf-8")
+    calls = []
+
+    def fail(path, destination):
+        calls.append(path)
+        raise error
+
+    monkeypatch.setattr(Path, "replace", fail)
+    monkeypatch.setattr(journal_node.time, "sleep", lambda _: pytest.fail("unexpected retry"))
+    with pytest.raises(type(error)):
+        journal_node.replace_metadata_file(source, target)
+    assert len(calls) == 1 and source.read_text() == "new" and target.read_text() == "old"
 
 
 def test_sensor_subscriptions_accept_best_effort_and_reliable_publishers():

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -24,10 +25,11 @@ def run_state_check(tmp_path, body):
     source = f"""
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile({literal(HELPER)}, [ref]$tokens, [ref]$errors)
 if ($errors.Count) {{ throw ($errors | Out-String) }}
-$wanted = @('Save-OwnedState','Read-OwnedState','Assert-IPv4','Assert-OwnFirewallRule','Add-OwnedFirewall','Set-OwnedProxy')
+$wanted = @('Save-OwnedState','Read-OwnedState','Assert-IPv4','Assert-OwnFirewallRule','Add-OwnedFirewall','Set-OwnedProxy','Invoke-NativeReadOrChange')
 $functions = $ast.FindAll({{ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] }}, $false)
 foreach ($function in $functions) {{
     if ($function.Name -in $wanted) {{ . ([scriptblock]::Create($function.Extent.Text)) }}
@@ -46,8 +48,65 @@ $state = [pscustomobject]@{{version=1; owner=$Owner; project_root=$ProjectRoot; 
         [POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=20,
     )
+
+
+@pytest.fixture
+def native_child(tmp_path):
+    # Use a real native executable, not a PowerShell function: only a native
+    # stderr stream reproduces PS5.1's NativeCommandError under Stop.
+    child = tmp_path / "native child.py"
+    child.write_text(
+        "import sys\n"
+        "sys.stderr.write('Harmless native warning: diagnostic address 192.0.2.99\\n')\n"
+        "sys.stderr.flush()\n"
+        "print('172.20.0.3', flush=True)\n"
+        "sys.exit(int(sys.argv[1]))\n",
+        encoding="utf-8",
+    )
+    return child
+
+
+@pytest.mark.parametrize("preference", ["Stop", "Continue"])
+def test_native_warning_with_exit_zero_returns_only_stdout_and_restores_preference(tmp_path, native_child, preference):
+    result = run_state_check(
+        tmp_path,
+        f"""
+$ErrorActionPreference = {literal(preference)}
+$before = $ErrorActionPreference
+$output = @(Invoke-NativeReadOrChange {literal(sys.executable)} @('-I', '-S', '-B', {literal(native_child)}, '0'))
+if ($ErrorActionPreference -ne $before) {{ throw 'Success changed caller ErrorActionPreference' }}
+if ($output.Count -ne 1 -or $output[0] -isnot [string] -or $output[0] -cne '172.20.0.3') {{
+    throw "Native stdout was missing or polluted by stderr: $($output -join '|')"
+}}
+Assert-IPv4 $output[0] 'Native stdout IP'
+""",
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("preference", ["Stop", "Continue"])
+def test_native_nonzero_reports_exit_and_stderr_and_restores_preference(tmp_path, native_child, preference):
+    result = run_state_check(
+        tmp_path,
+        f"""
+$ErrorActionPreference = {literal(preference)}
+$before = $ErrorActionPreference
+$failure = $null
+try {{
+    [void](Invoke-NativeReadOrChange {literal(sys.executable)} @('-I', '-S', '-B', {literal(native_child)}, '7'))
+}} catch {{ $failure = $_.Exception.Message }}
+if ($ErrorActionPreference -ne $before) {{ throw 'Failure changed caller ErrorActionPreference' }}
+if ($null -eq $failure) {{ throw 'Nonzero native exit was accepted' }}
+if ($failure -notmatch '(?i)(?:failed|exit(?:\\s+code)?)\\s*[:=( ]+7(?![0-9])' -or
+    $failure -notlike '*Harmless native warning: diagnostic address 192.0.2.99*') {{
+    throw "Native failure lost its exit code or stderr diagnostic: $failure"
+}}
+""",
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_first_save_and_atomic_overwrite_are_readable_on_ps51(tmp_path):

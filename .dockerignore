@@ -10,6 +10,11 @@ logs/
 .idea/
 .superpowers/
 .env
+.env.*
+.tmp/
+.tmp_*
+.github/
+.ruff_cache/
 
 build/
 dist/

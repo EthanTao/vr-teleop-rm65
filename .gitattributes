@@ -2,6 +2,8 @@
 docker/servo_entrypoint.sh text eol=lf
 docker/install_pc_service.sh text eol=lf
 docker/Dockerfile.moveit text eol=lf
-ros2_ws/patches/*.patch text eol=lf
+ros2_ws/patches/*.patch text eol=lf whitespace=-blank-at-eol,-blank-at-eof
 ros2_ws/src/rm65_servo_teleop/scripts/* text eol=lf
 scripts/setup/*.sh text eol=lf
+*.cmd text eol=crlf
+.github/workflows/*.yml text eol=lf

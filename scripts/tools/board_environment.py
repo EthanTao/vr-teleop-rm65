@@ -8,6 +8,7 @@ hardware-dry-run with PICO input; it never stops or replaces a container.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 from pathlib import Path
 import platform
@@ -160,14 +161,14 @@ def inspect_container(docker):
     return json.loads(result.stdout)
 
 
-def is_our_readonly_session(metadata, workspace):
+def is_our_readonly_session(metadata, workspace, *, arm_ip=ARM_IP, udp_ip=UDP_IP):
     expected = {
         "mode:=hardware-dry-run",
         "input_source:=pico",
         "foxglove:=true",
         "rviz:=false",
-        "arm_ip:=" + ARM_IP,
-        "udp_ip:=" + UDP_IP,
+        "arm_ip:=" + arm_ip,
+        "udp_ip:=" + udp_ip,
     }
     command = metadata.get("command") or []
     # Require the whole command: extra launch overrides must not enable motion.
@@ -185,15 +186,15 @@ def is_our_readonly_session(metadata, workspace):
     )
 
 
-def start_readonly(docker, workspace):
+def start_readonly(docker, workspace, *, arm_ip=ARM_IP, udp_ip=UDP_IP):
     current = inspect_container(docker)
     if current is not None:
-        if current["status"] == "running" and is_our_readonly_session(current, workspace):
+        if current["status"] == "running" and is_our_readonly_session(current, workspace, arm_ip=arm_ip, udp_ip=udp_ip):
             print("Existing read-only session is running; reused without restarting it.")
             return
         raise RuntimeError("The container name is already in use; refusing to stop, replace or restart it")
-    route = json.loads(execute(["ip", "-j", "route", "get", ARM_IP], capture_output=True).stdout)
-    if len(route) != 1 or route[0].get("prefsrc") != UDP_IP:
+    route = json.loads(execute(["ip", "-j", "route", "get", arm_ip], capture_output=True).stdout)
+    if len(route) != 1 or route[0].get("prefsrc") != udp_ip:
         raise RuntimeError("Board-to-controller route has changed; verify the configured UDP address first")
     ports = execute(["ss", "-H", "-lntu"], capture_output=True).stdout.splitlines()
     if any(field.rsplit(":", 1)[-1] in {"8089", "8765", "63901"} for line in ports for field in line.split()[4:5]):
@@ -229,11 +230,20 @@ def start_readonly(docker, workspace):
             "input_source:=pico",
             "foxglove:=true",
             "rviz:=false",
-            "arm_ip:=" + ARM_IP,
-            "udp_ip:=" + UDP_IP,
+            "arm_ip:=" + arm_ip,
+            "udp_ip:=" + udp_ip,
         ]
     )
-    print("Started PICO + hardware-dry-run. Native XR input and real UDP feedback are active; motion access remains disabled.")
+    print(
+        "Started PICO + hardware-dry-run. Native XR input and real UDP feedback are active; motion access remains disabled."
+    )
+
+
+def canonical_address(value):
+    address = ipaddress.IPv4Address(value)
+    if str(address) != value or address.is_unspecified or address.is_loopback or int(address) >= 0xE0000000:
+        raise argparse.ArgumentTypeError("Expected a canonical unicast LAN IPv4 address")
+    return value
 
 
 def main(argv=None):
@@ -241,6 +251,8 @@ def main(argv=None):
     parser.add_argument(
         "action", choices=["check", "status", "start-readonly", "input", "state", "logs"], nargs="?", default="status"
     )
+    parser.add_argument("--arm-ip", type=canonical_address)
+    parser.add_argument("--udp-ip", type=canonical_address)
     args = parser.parse_args(argv)
     if platform.system() != "Linux":
         parser.error("Run this tool on the Linux board, inside /home/rm/EthanTao")
@@ -269,12 +281,19 @@ def main(argv=None):
             input=CHECK_PROBE,
         ).returncode
     if args.action == "start-readonly":
-        start_readonly(docker, WORKSPACE)
+        start_readonly(docker, WORKSPACE, arm_ip=args.arm_ip or ARM_IP, udp_ip=args.udp_ip or UDP_IP)
         return 0
     current = inspect_container(docker)
     print(json.dumps({"workspace": str(WORKSPACE), "container": current}, indent=2), flush=True)
     if current is None or current["status"] != "running":
         return 2
+    if (args.arm_ip or args.udp_ip) and not is_our_readonly_session(
+        current,
+        WORKSPACE,
+        arm_ip=args.arm_ip or ARM_IP,
+        udp_ip=args.udp_ip or UDP_IP,
+    ):
+        raise RuntimeError("Existing session does not match the requested controller/UDP addresses; nothing changed")
     if args.action == "status":
         return execute(docker + ["exec", "-i", CONTAINER, "bash", "-c", SETUP_PYTHON], input=STATUS_PROBE).returncode
     if args.action == "input":

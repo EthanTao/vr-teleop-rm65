@@ -18,6 +18,7 @@ venv/
 
 # ===== 测试产物 =====
 .pytest_cache/
+.ruff_cache/
 .pytest-tmp/
 /pt-tmp/
 /.pytest-*.xml
@@ -29,6 +30,8 @@ venv/
 
 # ===== 本机环境与编辑器 =====
 .env
+.env.*
+!.env.example
 .vscode/
 .idea/
 .DS_Store
@@ -42,6 +45,9 @@ config/rm65_dls_calibration.json
 # 本机 AI 工具的工作目录与输出
 .codex/
 .superpowers/
+# Unrelated scratch work belongs in build/tmp/, even before it is archived.
+/.tmp/
+/.tmp_*
 
 # ===== 历史启动器缓存，防止误纳入版本库 =====
 vr-teleop-rm65.manifest.json

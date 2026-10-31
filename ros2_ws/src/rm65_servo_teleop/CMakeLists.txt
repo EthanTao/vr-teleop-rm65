@@ -46,7 +46,8 @@ endif()
 
 install(PROGRAMS scripts/xr_input_node scripts/mock_xr_input scripts/manual_simulation_input scripts/rm65_driver_bridge
   scripts/rm65_hand scripts/rm65_hand_command scripts/rm65_hand_driver scripts/rm65_camera
-  scripts/rm65_journal scripts/rm65_simulation_guard DESTINATION lib/${PROJECT_NAME})
+  scripts/rm65_journal scripts/rm65_simulation_guard scripts/rm65_simulation_reset
+  scripts/rm65_tcp_overlay DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(FILES ../../patches/realman_driver_feedback.patch DESTINATION share/${PROJECT_NAME}/patches)
 if(BUILD_TESTING)

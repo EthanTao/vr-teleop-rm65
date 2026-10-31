@@ -122,6 +122,22 @@ def normalize_diagnostic_values(topic: str, value):
     return normalized, issues
 
 
+def replace_metadata_file(temporary: Path, destination: Path) -> None:
+    """Keep atomic replacement; tolerate short Windows sharing/access conflicts.
+
+    Called only at session open/close, outside the control loop. Other errors
+    propagate immediately; persistent failures retain both files for diagnosis.
+    """
+    for attempt in range(6):
+        try:
+            temporary.replace(destination)
+            return
+        except PermissionError as exc:
+            if getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == 5:
+                raise
+            time.sleep(0.01 * 2**attempt)
+
+
 class JournalWriter:
     def __init__(
         self,
@@ -163,6 +179,8 @@ class JournalWriter:
         self._queue = queue.Queue(maxsize=capacity)
         self._stop = threading.Event()
         self._closed = False
+        self._close_lock = threading.Lock()
+        self._metadata_saved = False
         self._metadata(False)
         self._thread = threading.Thread(target=self._work, name="rm65-journal", daemon=True)
         self._thread.start()
@@ -209,7 +227,7 @@ class JournalWriter:
             json.dumps(value, indent=2),
             encoding="utf-8",
         )
-        temporary.replace(self.path / "session.json")
+        replace_metadata_file(temporary, self.path / "session.json")
 
     def append(self, topic: str, value, *, monotonic_s: float | None = None) -> bool:
         row = {
@@ -274,15 +292,19 @@ class JournalWriter:
             self.fail(f"journal write failed on {current_topic}: {exc}")
 
     def close(self):
-        if self._closed:
-            return
-        with self._lock:
-            self._closed = True
-        self._stop.set()
-        self._thread.join(timeout=3.0)
-        if self._thread.is_alive():
-            self.fail("journal did not drain within three seconds")
-        self._metadata(self.error is None and self.dropped == 0 and not self._thread.is_alive())
+        # Serialize finalization and permit retry after a metadata save failure.
+        # Appends stay disabled as soon as the first close begins.
+        with self._close_lock:
+            if self._metadata_saved:
+                return
+            with self._lock:
+                self._closed = True
+            self._stop.set()
+            self._thread.join(timeout=3.0)
+            if self._thread.is_alive():
+                self.fail("journal did not drain within three seconds")
+            self._metadata(self.error is None and self.dropped == 0 and not self._thread.is_alive())
+            self._metadata_saved = True
 
 
 def main(args=None) -> None:

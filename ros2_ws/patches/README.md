@@ -1,5 +1,7 @@
 # 厂商驱动接入补丁
 
+另有 `mujoco_session_reset.patch`，仅针对 ros-controls/mujoco_ros2_control 0.1.2（提交 `178b1c39e5010185116bc89b4e94cbb25b825f61`）。Docker 构建核对提交并应用补丁；它在带有效仿真会话令牌的图形窗口内将 R 转为一次 ROS 复位请求，由 Python 节点关闭整张旧控制图，再交给宿主启动器重建。它不调用 `reset_world` / `mj_resetData`，不改变物理参数或控制阈值；无令牌时保留原生按键行为。`tools/test_viewer_reset_key.py` 可从打补丁后的实际源码提取适配器做离线 C++ 回调测试。
+
 仅针对 `dependencies.repos` 固定的官方提交 `61db3c367e8f5743ee68cee52c5574ec1ac645ca`。补丁把该可执行程序收敛为 Servo 专用设备接口，不提供第二套 IK 或轨迹插值。
 
 原生参数 `allow_servo_motion` 默认 `false`。此时只保留真实反馈发布；不创建命令订阅或停止/使能服务，退出也不发送停止指令。启动仍需建立 SDK 连接并配置 UDP 上报，这属于反馈接入配置。只有 `hardware` 模式通过现场验证文件后，launch 才能把该参数设为 `true`；`hardware-dry-run` 必须保持 `false`。

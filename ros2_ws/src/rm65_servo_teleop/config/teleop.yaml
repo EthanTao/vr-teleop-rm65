@@ -15,7 +15,7 @@ input:
   tcp_frame: tcp
   control_rate_hz: 50.0
   position_scale: 1.0
-  rotation_scale: 0.25
+  rotation_scale: 1.0
   grip_on: 0.2
   grip_off: 0.15
   xr_timeout_s: 0.20
@@ -23,7 +23,7 @@ input:
   tf_timeout_s: 0.20
   max_xr_step_m: 0.05
   max_xr_rot_step_rad: 0.26
-  max_rotation_offset_rad: 0.20
+  max_rotation_offset_rad: 0.7853981633974483
 servo:
   use_gazebo: false
   command_in_type: speed_units
@@ -74,7 +74,7 @@ safety:
   stop_verified: false
   speed_units_verified: false
   source_timeout_s: 0.20
-  max_linear_velocity_m_s: 0.05
+  max_linear_velocity_m_s: 0.15
   max_angular_velocity_rad_s: 0.25
 recording:
   output_root: /data/experiments

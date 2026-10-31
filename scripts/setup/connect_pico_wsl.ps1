@@ -52,11 +52,31 @@ $RuleDescription = "$Owner; project=$ProjectRoot; TCP63901 only; remove using th
 
 function Invoke-NativeReadOrChange {
     param([string]$Executable, [string[]]$Arguments)
-    $lines = @(& $Executable @Arguments 2>&1)
-    if ($LASTEXITCODE -ne 0) {
-        throw "Native command failed ($LASTEXITCODE): $Executable $($Arguments -join ' ')`n$($lines -join '`n')"
+    # PS5.1 turns redirected native stderr into ErrorRecord objects. WSL can
+    # emit a harmless proxy warning even on exit 0; Stop would abort before
+    # checking that exit code. Relax only this invocation, not caller policy.
+    $previousPreference = $ErrorActionPreference
+    # Native invocation updates the global automatic variable; a local reset
+    # would shadow the real exit status and incorrectly reject successful WSL.
+    $global:LASTEXITCODE = $null
+    try {
+        $ErrorActionPreference = 'Continue'
+        $lines = @(& $Executable @Arguments 2>&1)
+        $exitCode = $global:LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
     }
-    return (($lines | ForEach-Object { ([string]$_).Replace([string][char]0, '') }) -join "`n")
+    $outputLines = @($lines | Where-Object { $_ -isnot [Management.Automation.ErrorRecord] })
+    $errorLines = @($lines | Where-Object { $_ -is [Management.Automation.ErrorRecord] })
+    if ($null -eq $exitCode -or $exitCode -ne 0) {
+        throw "Native command failed ($exitCode): $Executable $($Arguments -join ' ')`n$($lines -join '`n')"
+    }
+    if ($errorLines.Count) {
+        $diagnostic = ($errorLines | ForEach-Object { ([string]$_).Replace([string][char]0, '') }) -join "`n"
+        Write-Warning "Native stderr (exit 0): $diagnostic" -WarningAction Continue
+    }
+    # Keep warnings out of machine-readable stdout (WSL JSON and netsh dump).
+    return (($outputLines | ForEach-Object { ([string]$_).Replace([string][char]0, '') }) -join "`n")
 }
 
 function Assert-IPv4 {
@@ -75,29 +95,31 @@ function Assert-IPv4 {
 }
 
 function Get-ProxyEntries {
-    # 'dump' emits netsh command syntax, avoiding localized table headings.
-    $dump = Invoke-NativeReadOrChange $Netsh @('interface', 'portproxy', 'dump')
-    foreach ($line in ($dump -split "`r?`n")) {
-        if ($line -notmatch '^\s*add\s+(v[46]tov[46])\s+') { continue }
-        $kind = $Matches[1]
-        $fields = @{}
-        foreach ($match in [regex]::Matches($line, '(listenaddress|listenport|connectaddress|connectport|protocol)=("[^"]*"|\S+)')) {
-            $fields[$match.Groups[1].Value] = $match.Groups[2].Value.Trim('"')
-        }
-        if (-not $fields.ContainsKey('listenport') -or -not $fields.ContainsKey('connectaddress')) {
-            throw 'Cannot safely parse an existing portproxy entry; refusing changes.'
-        }
-        $listenPort = 0
-        $connectPort = 0
-        if (-not [int]::TryParse($fields.listenport, [ref]$listenPort)) { throw 'Invalid existing listen port.' }
-        if ($fields.ContainsKey('connectport')) {
-            if (-not [int]::TryParse($fields.connectport, [ref]$connectPort)) { throw 'Invalid existing destination port.' }
-        } else { $connectPort = $listenPort }
-        $listen = if ($fields.ContainsKey('listenaddress')) { $fields.listenaddress } elseif ($kind.StartsWith('v4')) { '0.0.0.0' } else { '::' }
-        [pscustomobject]@{
-            Kind = $kind; ListenAddress = $listen; ListenPort = $listenPort
-            ConnectAddress = $fields.connectaddress; ConnectPort = $connectPort
-            Protocol = if ($fields.ContainsKey('protocol')) { $fields.protocol } else { 'tcp' }
+    # netsh dump can OMIT the actual listenaddress of an old/offline adapter.
+    # Never guess wildcard ownership from that lossy display; read exact stored
+    # endpoints instead. All mutations still use netsh and ownership checks.
+    foreach ($kind in @('v4tov4', 'v4tov6', 'v6tov4', 'v6tov6')) {
+        $keyPath = "Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\PortProxy\$kind\tcp"
+        if (-not (Test-Path -LiteralPath $keyPath -ErrorAction Stop)) { continue }
+        $key = Get-Item -LiteralPath $keyPath -ErrorAction Stop
+        foreach ($name in $key.GetValueNames()) {
+            $value = $key.GetValue($name)
+            if ($value -isnot [string]) { throw 'Invalid existing portproxy registry value; refusing changes.' }
+            $listen = $name -split '/'
+            $connect = $value -split '/'
+            $listenPort = 0
+            $connectPort = 0
+            if ($listen.Count -ne 2 -or $connect.Count -ne 2 -or
+                [string]::IsNullOrWhiteSpace($listen[0]) -or [string]::IsNullOrWhiteSpace($connect[0]) -or
+                -not [int]::TryParse($listen[1], [ref]$listenPort) -or
+                -not [int]::TryParse($connect[1], [ref]$connectPort) -or
+                $listenPort -lt 1 -or $listenPort -gt 65535 -or $connectPort -lt 1 -or $connectPort -gt 65535) {
+                throw 'Cannot safely parse an existing portproxy registry endpoint; refusing changes.'
+            }
+            [pscustomobject]@{
+                Kind = $kind; ListenAddress = $listen[0]; ListenPort = $listenPort
+                ConnectAddress = $connect[0]; ConnectPort = $connectPort; Protocol = 'tcp'
+            }
         }
     }
 }
