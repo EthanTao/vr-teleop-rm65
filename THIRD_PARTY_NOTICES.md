@@ -1,5 +1,14 @@
 # Third-party notices
 
+## HDU-EILab/ur5-teleop
+
+- Repository: https://github.com/HDU-EILab/ur5-teleop
+- Reviewed and adapted commit: `8691bfae256d9f48db60eeeca56e243b043d1fea`.
+- `ur5_teleop/frames.py` is retained as `rm65_servo_teleop/ur_follow_frames.py` with an attribution header.
+- `clip_pose` and `limit_pose_step` from `ur5_teleop/target.py` are retained in `rm65_servo_teleop/follow_targets.py`; imports are adapted to the package.
+- The RM65 SDK boundary, follower policy, replay and shadow observation code are local adaptations. UR RTDE, URScript, automatic Home and gripper code are not copied.
+- Copyright (c) 2026 HDU-EILab. The full upstream MIT license is retained in [ur5-teleop-MIT.txt](ros2_ws/src/rm65_servo_teleop/licenses/ur5-teleop-MIT.txt) and installed with the ROS package. The upstream license's RTDE third-party note is retained verbatim; RTDE itself is not included here.
+
 ## CustomTkinter
 
 - Repository: https://github.com/TomSchimansky/CustomTkinter

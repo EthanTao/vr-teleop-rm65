@@ -1,6 +1,6 @@
 # 项目工作规范
 
-PICO + XRoboToolkit → 侧装 RealMan RM65。**2026-10-25 用户决定用 MoveIt Servo 替换自研运动核心，并舍弃旧后端兼容。** 日常统一使用 `start.py`（桌面控制台或显式模式）；底层运动链入口仍是 `teleop.py` → `servo_launcher.py` → `ros2_ws/src/rm65_servo_teleop/launch/teleop.launch.py`。
+PICO + XRoboToolkit → 侧装 RealMan RM65。**2026-11-12 用户要求本地同时保留 MoveIt Servo 版与参照 UR5 实现的官方 IK 连续跟随版。** 当前正式ROS控制图仍为Servo；新版`official_follow.py`支持离线计算、`--sim --web`独立MuJoCo 4浏览器物理仿真及ROS shadow，不覆盖Servo、不接真实发送。两版范围、入口和证据见[双版本说明](docs/双版本跟随说明.md)。日常Servo使用`start.py`；底层仍是`teleop.py` → `servo_launcher.py` → `ros2_ws/src/rm65_servo_teleop/launch/teleop.launch.py`。
 
 Windows 本机仿真采用 WSL2 `RM65-Servo`（Ubuntu22.04 + Docker Engine），用户已授权必要时清旧环境后重建；旧 Ubuntu20.04 已备份并清理。ROS2 Humble 仍在同一 Docker 镜像内运行，真机使用板端执行。当前验证以[本机部署页](docs/本机仿真部署.md)和工作日志为准。
 
@@ -17,7 +17,7 @@ Windows 本机仿真采用 WSL2 `RM65-Servo`（Ubuntu22.04 + Docker Engine），
 
 ## 必须遵守
 
-1. **一条运动链。** 输入适配只处理输入有效性、Grip、映射和锚点；位姿跟随、IK、平滑和模型保护交给 Humble PoseTracking / Servo；标准 JTC 处理轨迹。设备适配只负责反馈、指令准入和停止确认，不另写 IK 或回退旧控制器。
+1. **唯一运动发送者，保留两版源码。** 现行 Servo 输入适配只处理输入有效性、Grip、映射和锚点；位姿跟随、IK、平滑和模型保护仍交给 PoseTracking / Servo，JTC 处理轨迹。新版官方 IK 在独立进程只计算并输出候选诊断，不向设备命令、使能或停止接口发布。不得把两版同时接入真实发送；后续接管执行须明确记录行为差异和独立验收。不恢复归档的旧 DLS/多后端入口。
 2. **仿真与真机使用同一组控制配置。** 默认仿真使用 MuJoCo / mujoco_ros2_control；GenericSystem 仅供快速控制图诊断，真机为受控 TopicBasedSystem。保持同一 Servo/JTC，不添加仿真专用 IK。MuJoCo 的执行器与接触参数属于未标定假设，模拟反馈不证明真实执行。
 3. **帧未验证不得上机。** 当前 d6、finger TCP 来源于历史快照，安装位姿仍需现场核对；与官方 FK / UDP TCP 对比。默认竖立显示不等于真实侧装方向已经标定。
 4. **新鲜反馈来自真实 UDP 包。** 禁止用缓存重打时间戳；要求同帧 q/qdot/错误、包标识和源会话。官方旧 `/joint_states` 仅作诊断，不能代替该依据。

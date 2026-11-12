@@ -1,0 +1,18 @@
+# Shadow/replay only. This file does not authorize any hardware execution.
+# Uses the shared model/tool/speeds from teleop.yaml; no second model snapshot.
+period_s: 0.02
+linear_velocity_m_s: 0.15
+angular_velocity_rad_s: 0.25
+source_timeout_s: 0.20
+solve_budget_s: 0.015
+reject_hold_s: 0.12
+progress_timeout_s: 0.30
+max_lead_cycles: 3.0
+max_attempts: 4
+# Example operation box, not verified for the side-mounted physical robot.
+workspace_min: [-0.8, -0.8, -0.8]
+workspace_max: [0.8, 0.8, 1.2]
+frame_position_tolerance_m: 0.005
+frame_rotation_tolerance_rad: 0.03490658503988659
+solution_position_tolerance_m: 0.001
+solution_rotation_tolerance_rad: 0.01

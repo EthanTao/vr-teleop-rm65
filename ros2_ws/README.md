@@ -1,5 +1,7 @@
 # 单一 MoveIt Servo 控制链
 
+2026-11-12：用户要求保留此 Servo 运行版，并新增 UR5 风格的官方 IK 连续跟随计算版。新计算核心不接管本文控制图；`official_follow_shadow.launch.py` 只订阅既有目标/反馈并发布 `/rm65/official_follow/shadow` 诊断，不启动驱动或发布运动。使用及验证边界见[双版本说明](../docs/双版本跟随说明.md)。
+
 实现基线：Ubuntu 22.04 / ROS2 Humble；RealMan 上游固定提交 `61db3c367e8f5743ee68cee52c5574ec1ac645ca`，见 [dependencies.repos](dependencies.repos)。当前控制链只有 **InputAdapter → PoseTracking → MoveIt Servo → JTC**。无手柄、PICO 和自动验收只切换输入源，仿真与真机只切换设备接口。MuJoCo 与 GenericSystem 的历史证据见[2026-10-26日志](../docs/logs/2026.10.26.md)，本轮三个入口与 manual 输入的验证见[2026-10-27日志](../docs/logs/2026.10.27.md)；软件仿真不替代实体 PICO、板端 ARM64 和真机验收。
 
 ## 数据流与职责

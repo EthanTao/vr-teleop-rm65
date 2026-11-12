@@ -48,12 +48,15 @@ install(PROGRAMS scripts/xr_input_node scripts/mock_xr_input scripts/manual_simu
   scripts/rm65_hand scripts/rm65_hand_command scripts/rm65_hand_driver scripts/rm65_camera
   scripts/rm65_journal scripts/rm65_simulation_guard scripts/rm65_simulation_reset
   scripts/rm65_tcp_overlay DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/rm65_official_follow_shadow DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY licenses DESTINATION share/${PROJECT_NAME})
 install(FILES ../../patches/realman_driver_feedback.patch DESTINATION share/${PROJECT_NAME}/patches)
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   find_package(launch_testing_ament_cmake REQUIRED)
   ament_add_pytest_test(input_adapter test/test_input_adapter.py PYTHON_EXECUTABLE /usr/bin/python3)
+  ament_add_pytest_test(official_follow test/test_official_follow.py PYTHON_EXECUTABLE /usr/bin/python3)
   ament_add_pytest_test(input_shutdown test/test_input_shutdown.py PYTHON_EXECUTABLE /usr/bin/python3)
   ament_add_pytest_test(launch_lifecycle test/test_launch_lifecycle.py PYTHON_EXECUTABLE /usr/bin/python3)
   ament_add_pytest_test(transport_guard test/test_transport_guard.py PYTHON_EXECUTABLE /usr/bin/python3)

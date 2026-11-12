@@ -20,6 +20,7 @@
 | [tools/analyze_manual_tracking.py](tools/analyze_manual_tracking.py) | 源时间因果对齐、误差/收敛/重复性/停止指标及曲线；`--strict`未达标返回失败 |
 | [tools/check-lan-reachable.ps1](tools/check-lan-reachable.ps1) | SSH 配置引用的网络探测；路径保持稳定 |
 | [tools/check_repository.py](tools/check_repository.py) | 统一开发检查：源码/配置、安装清单、导航链接、Ruff 与本机 pytest；不启动控制环境 |
+| [tools/replay_official_follow.py](tools/replay_official_follow.py) | UR5 风格官方 IK 计算回放；独立根入口为 [official_follow.py](../official_follow.py)，只算不发，见[双版本说明](../docs/双版本跟随说明.md) |
 | [tools/check_robot_readiness.py](tools/check_robot_readiness.py) | 板端只读预检并保存报告；不部署、不使能运动，现场使用见[操作清单](../docs/真机现场操作清单.md) |
 | [tools/make_advisor_docx.py](tools/make_advisor_docx.py) | 保留的历史研究文档生成器，输出旧 `docs/research/` 路径，非运行依赖 |
 

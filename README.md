@@ -2,6 +2,8 @@
 
 无手柄控制台 / PICO → **InputAdapter → PoseTracking → MoveIt Servo → JointTrajectoryController（JTC）→ MuJoCo / RM65 官方驱动**。输入方式和设备接口可切换，运动控制逻辑只有一条；原 Placo、官方 IK 和 shared-dls 已退出入口和安装依赖。
 
+2026-11-12：按用户要求本地保留两版。上面的 Servo 版仍通过 `start.py` 使用；新增 UR5 风格的板端官方 IK 跟随计算核心，独立入口为 `official_follow.py`，现阶段仅离线回放/合成反馈演示或 ROS 只算不发观察，不接管设备。两版对照、SDK 与运行方式见[双版本跟随说明](docs/双版本跟随说明.md)。
+
 **机器人断电时，Windows 本机通过 WSL2 运行同一套 ROS 仿真。** 新环境为 D 盘的 `RM65-Servo`（Ubuntu 22.04 + Docker Engine），不需要 Docker Desktop。真机仍由板端 Linux 接入；两者共用控制代码。部署与验证状态见[本机仿真](docs/本机仿真部署.md)。
 
 ## 开始使用
