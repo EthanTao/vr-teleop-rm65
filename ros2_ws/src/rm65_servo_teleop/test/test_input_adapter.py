@@ -18,7 +18,7 @@ from rm65_servo_teleop.input_adapter import (
     quaternion_rotvec,
     rotvec_quaternion,
 )
-from rm65_servo_teleop.mock_xr import make_packet
+from xr_fixture import make_packet
 
 TCP = Pose.from_vector([0.4, 0.0, 0.3, 0.0, 0.0, 0.0, 1.0])
 
@@ -267,7 +267,7 @@ def test_malformed_tcp_pose_cannot_bypass_pure_adapter_validation():
 
 def test_mock_waits_for_tracker_to_acknowledge_initial_grip_release():
     import json
-    from rm65_servo_teleop.mock_xr import MockStartupGate
+    from xr_fixture import MockStartupGate
 
     gate = MockStartupGate()
     gate.input_status(json.dumps({"reason": "released", "enabled": False}), 1.0)
@@ -292,7 +292,7 @@ def test_mock_waits_for_tracker_to_acknowledge_initial_grip_release():
 
 @pytest.mark.parametrize("malformed", ["null", "[]", "bad-json", '{"state":"grip_released"}'])
 def test_mock_rejects_malformed_or_incomplete_tracker_readiness(malformed):
-    from rm65_servo_teleop.mock_xr import MockStartupGate
+    from xr_fixture import MockStartupGate
 
     gate = MockStartupGate()
     gate.input_status('{"reason":"released","enabled":false}', 1.0)

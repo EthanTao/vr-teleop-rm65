@@ -211,11 +211,9 @@ def validate_options(args) -> None:
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.@:-]*", args.host):
         raise ValueError("invalid SSH host alias")
     if args.input is None:
-        args.input = "mock" if args.mode in {"sim", "test", "sync-only"} else "pico"
-    if args.input == "manual" and args.mode != "sim":
-        raise ValueError("无手柄面板输入仅用于 sim；不会连接真机或真机 Dry Run")
-    if args.mode in {"hardware", "hardware-dry-run"} and args.input == "mock":
-        raise ValueError("模拟输入不能连接真机或真机 Dry Run")
+        args.input = "external" if args.mode == "test" else "pico"
+    if args.input not in {"pico", "external"}:
+        raise ValueError("仅支持 PICO 手柄或外部 XR 数据源；无手柄输入已移除")
     if args.mode in {"hardware", "hardware-dry-run"} and not args.udp_ip:
         raise ValueError("须显式提供 --udp-ip：机器人能访问的 Linux 板地址")
     if args.mode == "hardware":
@@ -327,8 +325,6 @@ def run(args) -> int:
         for command in planned:
             print(shlex.join(command))
         return 0
-    if args.mode == "sim" and args.input == "manual" and args.viewer and not args.model_only:
-        print("无手柄控制面板：http://127.0.0.1:8766；仿真服务就绪后在浏览器打开。", flush=True)
     if args.target == "remote":
         remote = shlex.quote(args.remote_dir)
         subprocess.run(
@@ -343,8 +339,6 @@ def run(args) -> int:
             options = ["ssh", "-t"] if os.isatty(0) else ["ssh"]
             if args.viewer and index == len(planned) - 1 and args.mode not in {"test", "sync-only"}:
                 options.extend(["-o", "ExitOnForwardFailure=yes", "-L", "127.0.0.1:8765:127.0.0.1:8765"])
-                if args.mode == "sim" and args.input == "manual":
-                    options.extend(["-L", "127.0.0.1:8766:127.0.0.1:8766"])
             subprocess.run([*options, args.host, f"cd {remote} && {shlex.join(command)}"], check=True)
     elif args.target == "wsl":
         wsl_root = wsl_repository_path(args)
@@ -366,7 +360,7 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--mode", "-m", choices=["sim", "test", "hardware-dry-run", "hardware", "sync-only"], default="sim"
     )
-    parser.add_argument("--input", choices=["manual", "mock", "pico", "external"])
+    parser.add_argument("--input", choices=["pico", "external"])
     parser.add_argument("--hand", choices=["off", "mock"], default="off", help="可选灵巧手流程演练，默认关闭；mock 无接触物理或真机发送")
     parser.add_argument(
         "--simulator", choices=["mujoco", "mock"], help="sim 默认使用 MuJoCo 物理仿真；mock 用于快速控制图诊断"

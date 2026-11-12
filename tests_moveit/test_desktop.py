@@ -31,7 +31,7 @@ def test_offline_menu_preview_does_not_open_desktop(monkeypatch):
     dispatch.assert_called_once_with("menu", ["--check-only"])
 
 
-@pytest.mark.parametrize("kind", ["sim", "pico"])
+@pytest.mark.parametrize("kind", ["pico"])
 def test_simulation_builder_preserves_source_and_offline_option(monkeypatch, kind):
     monkeypatch.setattr(desktop.subprocess, "Popen", forbidden)
     command = desktop.simulation_command(kind, distro="RM65-Servo", address="192.0.2.50", rviz=True, preview=True)
@@ -55,7 +55,7 @@ def test_board_query_retains_literal_settings_and_rejects_unlisted_actions():
 
 def test_invalid_gui_field_is_validation_error_instead_of_parser_exit():
     with pytest.raises(ValueError):
-        desktop.simulation_command("sim", distro="--invalid-distro", preview=True)
+        desktop.simulation_command("pico", distro="--invalid-distro", preview=True)
 
 
 @pytest.mark.parametrize("record,ack", [("record.yaml", ""), ("", "RM65 LIVE VALIDATION")])

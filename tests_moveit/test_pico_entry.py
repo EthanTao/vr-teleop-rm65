@@ -65,7 +65,7 @@ def test_ambiguous_or_invalid_address_does_not_guess(candidates, requested):
         launcher.select_pico_address(candidates, requested)
 
 
-@pytest.mark.parametrize("kind", ["manual", "pico"])
+@pytest.mark.parametrize("kind", ["pico"])
 def test_check_only_is_in_process_and_never_reads_or_changes_network(monkeypatch, kind):
     preview = Mock(return_value=0)
     monkeypatch.setattr(servo_launcher, "main", preview)
@@ -98,7 +98,7 @@ def test_explicit_pico_preview_does_not_claim_to_have_selected_a_nic(monkeypatch
     assert "192.168.1.2:63901" in output and "预览不枚举网卡" in output
 
 
-@pytest.mark.parametrize("kind", ["manual", "pico"])
+@pytest.mark.parametrize("kind", ["pico"])
 @pytest.mark.parametrize("viewer", [[], ["--rviz"], ["--no-viewer"]])
 def test_sim_arguments_preserve_existing_teleop_cli(kind, viewer):
     args = launcher.make_parser(kind).parse_args(["--distro", "RM65-Custom", *viewer])
@@ -118,7 +118,6 @@ def test_sim_arguments_preserve_existing_teleop_cli(kind, viewer):
 @pytest.mark.parametrize(
     "options",
     [
-        ["--listen-address", "192.168.1.2"],
         ["--rviz", "--no-viewer"],
         ["--distro", "bad; touch injected"],
         ["--distro", "bad'quote"],
@@ -129,17 +128,15 @@ def test_invalid_sim_options_fail_before_any_side_effect(monkeypatch, options):
     monkeypatch.setattr(launcher, "run_command", forbidden)
     monkeypatch.setattr(launcher, "get_pico_candidates", forbidden)
     monkeypatch.setattr(launcher, "preview", forbidden)
-    assert launcher.main("manual", options) == 2
+    assert launcher.main("pico", options) == 2
 
 
-@pytest.mark.parametrize("kind", ["manual", "pico"])
+@pytest.mark.parametrize("kind", ["pico"])
 def test_all_shortcuts_route_to_same_teleop_with_docker_before_network(monkeypatch, kind, capsys):
     # Patch this module's os binding, never global os.name (which breaks pathlib on POSIX).
     monkeypatch.setattr(launcher, "os", SimpleNamespace(name="nt", environ=os.environ))
     calls = []
     monkeypatch.setattr(launcher, "get_pico_candidates", lambda: [candidate()])
-    if kind == "manual":
-        monkeypatch.setattr(launcher, "get_pico_candidates", forbidden)
     monkeypatch.setattr(launcher, "setup_pico_network", lambda *args: calls.append(("network", args)))
     monkeypatch.setattr(launcher, "run_command", lambda command, **kwargs: calls.append(("process", command, kwargs)))
     assert launcher.main(kind, []) == 0
@@ -208,19 +205,17 @@ def test_non_windows_sim_fails_closed_before_query_or_launch(monkeypatch):
     assert launcher.main("pico", []) == 2
 
 
-def test_mock_demo_remains_on_existing_teleop_cli(monkeypatch):
-    # No fourth shortcut / new motion chain: mock is still teleop.py's original input.
-    import teleop
+@pytest.mark.parametrize("source", ["manual", "mock"])
+def test_removed_synthetic_input_fails_before_launch(monkeypatch, source):
+    monkeypatch.setattr(servo_launcher, "run", forbidden)
+    with pytest.raises(SystemExit) as error:
+        servo_launcher.main(["--mode", "sim", "--input", source, "--print-command"])
+    assert error.value.code == 2
 
-    preview = Mock(return_value=0)
-    monkeypatch.setattr(servo_launcher, "run", preview)
-    assert teleop.main(["--mode", "sim", "--target", "local", "--input", "mock", "--print-command"]) == 0
-    args = preview.call_args.args[0]
-    assert (args.mode, args.target, args.input, args.print_command) == ("sim", "local", "mock", True)
 
 
 @pytest.mark.parametrize(
-    "mode,kind", [("sim", "manual"), ("pico", "pico"), ("real", "real")]
+    "mode,kind", [("pico", "pico"), ("real", "real")]
 )
 def test_single_root_entry_forwards_mode_arguments_and_exit_code(monkeypatch, mode, kind):
     cli = Mock(return_value=23)
@@ -244,7 +239,7 @@ def test_only_english_daily_entry_remains_and_network_helper_is_preserved():
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Actual WSL preview requires a Windows drive root")
-@pytest.mark.parametrize("mode,source", [("sim", "manual"), ("pico", "pico")])
+@pytest.mark.parametrize("mode,source", [("pico", "pico")])
 def test_actual_python_sim_cli_check_only_from_other_cwd(tmp_path, mode, source):
     result = subprocess.run(
         [sys.executable, "-B", str(ROOT / "start.py"), mode, "--check-only"],
@@ -417,7 +412,7 @@ if ($Distro -cne 'a'';$(throw ''INJECTED'')#') { throw 'WRONG_LITERAL' }
 def test_main_preserves_results_and_reports_interrupts(monkeypatch, capsys, outcome, expected):
     run = Mock(side_effect=outcome) if isinstance(outcome, BaseException) else Mock(return_value=outcome)
     monkeypatch.setattr(launcher, "run", run)
-    assert launcher.main("manual", []) == expected
+    assert launcher.main("pico", []) == expected
     if expected == 130:
         assert "实体静止" in capsys.readouterr().out
 
@@ -434,7 +429,7 @@ def test_cli_pause_only_for_interactive_requested_or_owned_console(monkeypatch, 
     monkeypatch.setattr(launcher, "main", Mock(return_value=7))
     prompt = Mock(return_value="")
     monkeypatch.setattr(builtins, "input", prompt)
-    assert launcher.cli("manual") == 7
+    assert launcher.cli("pico") == 7
     assert prompt.call_count == expected
     logs = list((tmp_path / "build/logs/startup").glob("*.log"))
     assert len(logs) == 1 and "退出 7" in logs[0].read_text(encoding="utf-8")
@@ -446,4 +441,4 @@ def test_cli_converts_parser_system_exit_without_losing_exit_code(monkeypatch, t
     monkeypatch.setattr(launcher, "owns_console", lambda: False)
     monkeypatch.setattr(launcher, "main", Mock(side_effect=SystemExit(code)))
     monkeypatch.setattr(sys, "argv", ["shortcut.py"])
-    assert launcher.cli("manual") == code
+    assert launcher.cli("pico") == code

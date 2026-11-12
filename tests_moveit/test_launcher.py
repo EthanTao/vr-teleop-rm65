@@ -31,9 +31,9 @@ def test_print_command_is_offline_and_uses_one_stack(monkeypatch, capsys):
     monkeypatch.setattr(servo_launcher.subprocess, "run", forbidden)
     assert servo_launcher.main(["--mode", "sim", "--target", "remote", "--print-command"]) == 0
     output = capsys.readouterr().out
-    assert "RM65_WITH_XR_SDK=OFF" in output
+    assert "RM65_WITH_XR_SDK=ON" in output
     assert "rm65_servo_teleop" in output
-    assert "input_source:=mock" in output
+    assert "input_source:=pico" in output
     assert "simulator:=mujoco" in output
     assert "placo" not in output and "damped_ik" not in output
 
@@ -74,7 +74,7 @@ def test_explicit_mock_uses_same_servo_launch_without_mujoco_window(capsys, wsl_
     assert "rm65_servo_teleop" in output
 
 
-@pytest.mark.parametrize("input_source", ["manual", "mock", "pico"])
+@pytest.mark.parametrize("input_source", ["pico", "external"])
 def test_rviz_only_opens_when_explicitly_requested(input_source, capsys, wsl_root):
     assert (
         servo_launcher.main(["--mode", "sim", "--target", "wsl", "--input", input_source, "--rviz", "--print-command"])
@@ -99,18 +99,13 @@ def test_rviz_rejects_incompatible_modes_before_starting(monkeypatch, options):
     assert servo_launcher.main([*options, "--rviz", "--print-command"]) == 2
 
 
-@pytest.mark.parametrize("mode", ["hardware", "hardware-dry-run"])
-def test_synthetic_input_cannot_reach_hardware(mode):
-    assert servo_launcher.main(["--mode", mode, "--input", "mock", "--udp-ip", "192.168.0.115", "--print-command"]) == 2
 
 
-@pytest.mark.parametrize("mode", ["hardware", "hardware-dry-run", "test", "sync-only"])
-def test_manual_input_is_simulation_only_and_fails_before_any_process(monkeypatch, mode):
-    monkeypatch.setattr(servo_launcher.subprocess, "run", lambda *a, **k: pytest.fail("attempted external command"))
-    assert servo_launcher.main(["--mode", mode, "--input", "manual", "--udp-ip", "192.168.0.115"]) == 2
 
 
-@pytest.mark.parametrize("input_source,sdk", [("manual", "OFF"), ("pico", "ON"), ("mock", "OFF")])
+
+
+@pytest.mark.parametrize("input_source,sdk", [("pico", "ON"), ("external", "OFF")])
 def test_simulation_input_changes_only_the_source_and_sdk(monkeypatch, capsys, input_source, sdk, wsl_root):
     monkeypatch.setattr(servo_launcher.subprocess, "run", lambda *a, **k: pytest.fail("preview ran process"))
     assert servo_launcher.main(["--mode", "sim", "--target", "wsl", "--input", input_source, "--print-command"]) == 0
@@ -120,16 +115,7 @@ def test_simulation_input_changes_only_the_source_and_sdk(monkeypatch, capsys, i
     assert "teleop.launch.py" in output and "simulator:=mujoco" in output
 
 
-def test_manual_remote_panel_tunnel_belongs_only_to_its_running_session(monkeypatch, capsys):
-    calls = []
-    monkeypatch.setattr(servo_launcher.subprocess, "run", lambda command, **kwargs: calls.append(command))
-    monkeypatch.setattr(servo_launcher, "source_archive", lambda: b"source-only")
-    assert servo_launcher.main(["--mode", "sim", "--target", "remote", "--input", "manual"]) == 0
-    assert "8766" in capsys.readouterr().out
-    assert len(calls) == 4
-    assert all("-L" not in command for command in calls[:3])
-    assert "127.0.0.1:8766:127.0.0.1:8766" in calls[3]
-    assert "input_source:=manual" in calls[3][-1]
+
 
 
 def test_template_is_not_a_live_approval():
@@ -216,7 +202,7 @@ def test_wsl_print_command_is_offline_and_contains_root_docker_without_sudo(monk
     assert servo_launcher.main(["--target", "wsl", "--mode", "sim", "--sudo-docker", "--print-command"]) == 0
     output = capsys.readouterr().out
     assert "wsl.exe --distribution RM65-Servo --user root --cd" in output
-    assert "--exec docker compose" in output and "input_source:=mock" in output
+    assert "--exec docker compose" in output and "input_source:=pico" in output
     assert "sudo" not in output and "ssh" not in output
     assert "wslpath" in output and "不启动 WSL" in output
 
@@ -258,7 +244,7 @@ def test_wsl_executes_same_docker_commands_with_literal_argv(monkeypatch, wsl_ro
     assert calls[2][0][-5:] == [
         "build",
         "--build-arg",
-        "RM65_WITH_XR_SDK=OFF",
+        "RM65_WITH_XR_SDK=OFF" if mode == "test" else "RM65_WITH_XR_SDK=ON",
         "--build-arg",
         "RM65_SOURCE_SHA=fixture-source-hash",
     ]
@@ -266,7 +252,7 @@ def test_wsl_executes_same_docker_commands_with_literal_argv(monkeypatch, wsl_ro
         assert "--network" in calls[3][0] and "none" in calls[3][0]
         assert "colcon test" in calls[3][0][-1]
     else:
-        assert "input_source:=mock" in calls[3][0] and "mode:=sim" in calls[3][0]
+        assert "input_source:=pico" in calls[3][0] and "mode:=sim" in calls[3][0]
 
 
 def mock_wsl_cache_probe(monkeypatch, *, stdout, error=None):
@@ -287,7 +273,7 @@ def mock_wsl_cache_probe(monkeypatch, *, stdout, error=None):
 
 
 @pytest.mark.parametrize("mode", ["sim", "test"])
-@pytest.mark.parametrize("input_source,sdk", [("mock", "OFF"), ("external", "OFF"), ("pico", "ON")])
+@pytest.mark.parametrize("input_source,sdk", [("external", "OFF"), ("pico", "ON")])
 def test_matching_wsl_image_skips_build_and_retains_run_constraints(
     monkeypatch, capsys, wsl_root, mode, input_source, sdk
 ):
@@ -316,15 +302,15 @@ def test_matching_wsl_image_skips_build_and_retains_run_constraints(
 @pytest.mark.parametrize(
     "input_source,labels",
     [
-        ("mock", {"org.rm65.source-sha": "old-source", "org.rm65.xr-sdk": "OFF"}),
-        ("mock", {"org.rm65.source-sha": "fixture-source-hash", "org.rm65.xr-sdk": "ON"}),
+        ("external", {"org.rm65.source-sha": "old-source", "org.rm65.xr-sdk": "OFF"}),
+        ("external", {"org.rm65.source-sha": "fixture-source-hash", "org.rm65.xr-sdk": "ON"}),
         ("pico", {"org.rm65.source-sha": "fixture-source-hash", "org.rm65.xr-sdk": "OFF"}),
-        ("mock", {"org.rm65.source-sha": "fixture-source-hash", "org.rm65.xr-sdk": "off"}),
-        ("mock", {"org.rm65.source-sha": "fixture-source-hash"}),
-        ("mock", {"org.rm65.xr-sdk": "OFF"}),
-        ("mock", {}),
-        ("mock", None),
-        ("mock", []),
+        ("external", {"org.rm65.source-sha": "fixture-source-hash", "org.rm65.xr-sdk": "off"}),
+        ("external", {"org.rm65.source-sha": "fixture-source-hash"}),
+        ("external", {"org.rm65.xr-sdk": "OFF"}),
+        ("external", {}),
+        ("external", None),
+        ("external", []),
     ],
 )
 def test_wsl_cache_mismatch_or_missing_labels_performs_normal_build(monkeypatch, wsl_root, input_source, labels):

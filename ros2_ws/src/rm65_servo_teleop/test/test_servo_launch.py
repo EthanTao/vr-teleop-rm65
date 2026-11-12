@@ -19,6 +19,7 @@ import math
 import os
 from pathlib import Path
 import secrets
+import sys
 import time
 import unittest
 
@@ -30,7 +31,7 @@ launch_testing = pytest.importorskip("launch_testing", reason="ROS launch_testin
 pytest.importorskip("launch_ros", reason="ROS launch_ros is not installed")
 
 from ament_index_python.packages import get_package_share_directory
-from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable
+from launch.actions import ExecuteProcess, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 import launch_testing.actions
 import launch_testing.asserts
@@ -59,7 +60,7 @@ def simulation_description(simulator):
         launch_arguments={
             "mode": "sim",
             "simulator": simulator,
-            "input_source": "mock",
+            "input_source": "external",
             "record": "false",
             "foxglove": "false",
             "rviz": "false",
@@ -69,6 +70,8 @@ def simulation_description(simulator):
         [
             SetEnvironmentVariable("ROS_DOMAIN_ID", _TEST_ROS_DOMAIN_ID),
             simulated_stack,
+            ExecuteProcess(cmd=[sys.executable, str(Path(__file__).with_name("xr_fixture.py")),
+                                "--ros-args", "-p", "simulation_only:=true"], output="screen"),
             launch_testing.actions.ReadyToTest(),
         ]
     )

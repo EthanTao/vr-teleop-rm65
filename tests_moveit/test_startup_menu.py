@@ -78,7 +78,7 @@ def test_empty_or_zero_menu_exits_without_dispatch(monkeypatch, real_only, choic
     assert menu.run_menu(real_only=real_only) == 0
 
 
-@pytest.mark.parametrize("choice,kind", [("1", "manual"), ("2", "pico")])
+@pytest.mark.parametrize("choice,kind", [("2", "pico")])
 def test_root_simulation_routes_existing_launcher_without_extra_flags(monkeypatch, choice, kind):
     set_tty(monkeypatch)
     answers(monkeypatch, choice)
@@ -465,7 +465,6 @@ def test_advanced_settings_are_not_retained_between_menu_sessions(monkeypatch):
 @pytest.mark.parametrize(
     "real_only,choice,target",
     [
-        (False, "1", "launcher"),
         (False, "2", "launcher"),
         (False, "3", "run_board_action"),
         (True, "1", "run_board_action"),

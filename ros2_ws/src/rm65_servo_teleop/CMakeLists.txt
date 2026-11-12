@@ -44,7 +44,7 @@ if(RM65_WITH_XR_SDK)
   install(TARGETS xr_sdk_node DESTINATION lib/${PROJECT_NAME})
 endif()
 
-install(PROGRAMS scripts/xr_input_node scripts/mock_xr_input scripts/manual_simulation_input scripts/rm65_driver_bridge
+install(PROGRAMS scripts/xr_input_node scripts/rm65_driver_bridge
   scripts/rm65_hand scripts/rm65_hand_command scripts/rm65_hand_driver scripts/rm65_camera
   scripts/rm65_journal scripts/rm65_simulation_guard scripts/rm65_simulation_reset
   scripts/rm65_tcp_overlay DESTINATION lib/${PROJECT_NAME})
@@ -67,12 +67,10 @@ if(BUILD_TESTING)
   ament_add_pytest_test(model test/test_model.py PYTHON_EXECUTABLE /usr/bin/python3)
   ament_add_pytest_test(mujoco_model test/test_mujoco_model.py PYTHON_EXECUTABLE /usr/bin/python3)
   ament_add_pytest_test(simulation_guard test/test_simulation_guard.py PYTHON_EXECUTABLE /usr/bin/python3)
-  ament_add_pytest_test(manual_input test/test_manual_input.py PYTHON_EXECUTABLE /usr/bin/python3)
   ament_add_pytest_test(native_contract test/test_native_contract.py PYTHON_EXECUTABLE /usr/bin/python3)
   add_launch_test(test/test_servo_launch.py TIMEOUT 120)
   add_launch_test(test/test_mujoco_launch.py TIMEOUT 120)
   add_launch_test(test/test_mujoco_pause_launch.py TIMEOUT 120)
-  add_launch_test(test/test_manual_launch.py TIMEOUT 120)
   add_launch_test(test/test_hand_launch.py TIMEOUT 120)
   add_launch_test(test/test_peripherals_launch.py TIMEOUT 90)
 endif()

@@ -52,10 +52,8 @@ def _setup(context):
     if simulator not in {"mock", "mujoco"}:
         raise ValueError("simulator must be mock or mujoco")
     use_mujoco = mode == "sim" and simulator == "mujoco"
-    if mode not in {"sim", "hardware-dry-run", "hardware"} or source not in {"mock", "manual", "pico", "external"}:
+    if mode not in {"sim", "hardware-dry-run", "hardware"} or source not in {"pico", "external"}:
         raise ValueError("invalid execution mode or input source")
-    if mode != "sim" and source in {"mock", "manual"}:
-        raise ValueError("synthetic XR is forbidden for hardware and hardware-dry-run")
     if mode != "sim" and not LaunchConfiguration("udp_ip").perform(context):
         raise ValueError("hardware state input needs an explicit board-side udp_ip, not an inferred Windows address")
     config_path = LaunchConfiguration("config").perform(context) or str(own / "config/teleop.yaml")
@@ -199,29 +197,7 @@ def _setup(context):
     )
     after_controller = [tracking, input_node]
     input_source_node = None
-    if source == "mock":
-        input_source_node = Node(
-            package="rm65_servo_teleop",
-            executable="mock_xr_input",
-            output="screen",
-            parameters=[{"simulation_only": True}],
-        )
-    elif source == "manual":
-        input_source_node = Node(
-            package="rm65_servo_teleop",
-            executable="manual_simulation_input",
-            output="screen",
-            parameters=[
-                {
-                    "simulation_only": True,
-                    "config_file": str(config_path),
-                    "port": int(LaunchConfiguration("manual_port").perform(context)),
-                    "position_scale": config["input"]["position_scale"],
-                    "rotation_scale": config["input"]["rotation_scale"],
-                }
-            ],
-        )
-    elif source == "pico":
+    if source == "pico":
         input_source_node = Node(package="rm65_servo_teleop", executable="xr_sdk_node", output="screen")
     if input_source_node is not None:
         after_controller.append(input_source_node)
@@ -411,8 +387,7 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("mode", default_value="sim"),
             DeclareLaunchArgument("hand_mode", default_value="off"),
-            DeclareLaunchArgument("input_source", default_value="mock"),
-            DeclareLaunchArgument("manual_port", default_value="8766"),
+            DeclareLaunchArgument("input_source", default_value="pico"),
             DeclareLaunchArgument("simulator", default_value="mujoco"),
             DeclareLaunchArgument("mujoco_viewer", default_value="false"),
             DeclareLaunchArgument("config", default_value=""),

@@ -1,4 +1,4 @@
-"""Deterministic, labelled XR fixture for the simulated execution interface only."""
+"""Test-only labelled XR fixture, never installed as a user input executable."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 import math
 import time
 
-from .input_adapter import rotvec_quaternion
+from rm65_servo_teleop.input_adapter import rotvec_quaternion
 
 
 class MockStartupGate:
@@ -140,3 +140,7 @@ def main(args=None) -> None:
         finally:
             if rclpy.ok():
                 rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

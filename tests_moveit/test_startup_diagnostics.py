@@ -38,7 +38,7 @@ def test_failures_are_visible_and_never_success(monkeypatch, capsys, failure, co
         raise failure
 
     monkeypatch.setattr(launcher, "run", fail)
-    assert launcher.main("manual", ["--check-only"]) == code
+    assert launcher.main("pico", ["--check-only"]) == code
     assert text in capsys.readouterr().out
 
 
@@ -58,7 +58,7 @@ def test_cli_writes_utf8_journal_and_never_prompts_in_automation(monkeypatch, tm
         return 2
 
     monkeypatch.setattr(launcher, "main", fail)
-    assert launcher.cli("manual") == 2
+    assert launcher.cli("pico") == 2
     logs = list((tmp_path / "build/logs/startup").glob("*.log"))
     assert len(logs) == 1
     assert "启动测试异常：中文路径" in logs[0].read_text(encoding="utf-8")
@@ -73,13 +73,13 @@ def test_pause_only_for_requested_or_explorer_console(monkeypatch, tmp_path, exp
     monkeypatch.setattr(launcher, "main", lambda kind: 0)
     prompts = []
     monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt))
-    assert launcher.cli("manual") == 0
+    assert launcher.cli("pico") == 0
     assert len(prompts) == 1
 
 
 def test_argument_error_keeps_failure_exit_code_and_journal(monkeypatch, tmp_path):
     configure_cli(monkeypatch, tmp_path, ["--wrong-option"])
-    assert launcher.cli("manual") == 2
+    assert launcher.cli("pico") == 2
     log = next((tmp_path / "build/logs/startup").glob("*.log"))
     assert "退出 2" in log.read_text(encoding="utf-8")
 

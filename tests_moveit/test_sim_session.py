@@ -234,7 +234,7 @@ def test_successful_ordinary_exit_is_not_retried(tmp_path):
 
 @pytest.mark.parametrize("failed_exit", [False, True])
 def test_explicit_request_restarts_once_only_after_exit_with_new_nonce_and_args(tmp_path, monkeypatch, failed_exit):
-    command = ["owned-launcher", "--mode", "sim", "--input-source", "manual"]
+    command = ["owned-launcher", "--mode", "sim", "--input-source", "pico"]
     original = command.copy()
     tokens = iter([TOKEN, NEXT_TOKEN])
     monkeypatch.setattr(sim_session.secrets, "token_hex", lambda size: next(tokens) if size == 16 else pytest.fail(size))

@@ -45,8 +45,8 @@ def python_executable() -> str:
 def simulation_command(
     kind: str, *, distro: str, address: str = "", rviz: bool = False, preview: bool = False
 ) -> list[str]:
-    if kind not in {"sim", "pico"}:
-        raise ValueError("请选择无手柄或 PICO 仿真。")
+    if kind != "pico":
+        raise ValueError("仿真仅保留 PICO 手柄输入。")
     options = ["--distro", distro]
     if kind == "pico" and address:
         options += ["--listen-address", address]
@@ -56,7 +56,7 @@ def simulation_command(
     parsed = SimpleNamespace(
         distro=distro, listen_address=address if kind == "pico" else None, rviz=rviz, no_viewer=False
     )
-    launcher.sim_arguments("pico" if kind == "pico" else "manual", parsed)
+    launcher.sim_arguments("pico", parsed)
     if preview:
         options.append("--check-only")
     return [python_executable(), "-X", "utf8", "-u", str(ROOT / "start.py"), kind, *options]
@@ -350,12 +350,6 @@ class DesktopApp:
         for index, (kind, title, subtitle, body) in enumerate(
             [
                 (
-                    "sim",
-                    "无手柄仿真",
-                    "MANUAL SIMULATION",
-                    "通过浏览器按钮或键盘控制机械臂。\n适合调试控制链，无需头显或机器人。",
-                ),
-                (
                     "pico",
                     "PICO 遥操作仿真",
                     "PICO SIMULATION",
@@ -379,10 +373,7 @@ class DesktopApp:
             self.button(row, "离线预览", lambda k=kind: self.start_sim(k, True), task=True, width=104).pack(side="left")
         row = ctk.CTkFrame(self.sim_page, fg_color="transparent")
         row.grid(row=1, column=0, columnspan=2, sticky="w", pady=(12, 0))
-        self.button(row, "打开无手柄控制页面 ↗", lambda: webbrowser.open("http://127.0.0.1:8766"), width=180).pack(
-            side="left"
-        )
-        self.label(row, "服务就绪后打开；MuJoCo 窗口按 R 复位。", size=10, color=self.MUTED).pack(side="left", padx=12)
+        self.label(row, "按日志地址连接 PICO；MuJoCo 窗口按 R 复位。", size=10, color=self.MUTED).pack(side="left", padx=12)
 
     def _hardware(self):
         ctk = self.ctk
@@ -507,7 +498,7 @@ class DesktopApp:
 
     def start_sim(self, kind, preview):
         self.launch(
-            "PICO 仿真" if kind == "pico" else "无手柄仿真",
+            "PICO 仿真",
             lambda: simulation_command(
                 kind,
                 distro=self.values["distro"].get().strip(),

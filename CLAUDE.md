@@ -1,6 +1,6 @@
 # 项目工作规范
 
-PICO + XRoboToolkit → 侧装 RealMan RM65。**2026-11-12 用户要求本地同时保留 MoveIt Servo 版与参照 UR5 实现的官方 IK 连续跟随版。** 当前正式ROS控制图仍为Servo；新版`official_follow.py`支持离线计算、`--sim --web`独立MuJoCo 4浏览器物理仿真及ROS shadow，不覆盖Servo、不接真实发送。两版范围、入口和证据见[双版本说明](docs/双版本跟随说明.md)。日常Servo使用`start.py`；底层仍是`teleop.py` → `servo_launcher.py` → `ros2_ws/src/rm65_servo_teleop/launch/teleop.launch.py`。
+PICO + XRoboToolkit → 侧装 RealMan RM65。**2026-11-12 用户要求本地同时保留 MoveIt Servo 版与参照 UR5 实现的官方 IK 连续跟随版。** 当前正式ROS控制图仍为Servo；新版`official_follow.py`支持录制数据回放及ROS shadow；按用户最新要求已移除所有无手柄仿真入口，不覆盖Servo、不接真实发送。两版范围、入口和证据见[双版本说明](docs/双版本跟随说明.md)。日常Servo使用`start.py`；底层仍是`teleop.py` → `servo_launcher.py` → `ros2_ws/src/rm65_servo_teleop/launch/teleop.launch.py`。
 
 Windows 本机仿真采用 WSL2 `RM65-Servo`（Ubuntu22.04 + Docker Engine），用户已授权必要时清旧环境后重建；旧 Ubuntu20.04 已备份并清理。ROS2 Humble 仍在同一 Docker 镜像内运行，真机使用板端执行。当前验证以[本机部署页](docs/本机仿真部署.md)和工作日志为准。
 

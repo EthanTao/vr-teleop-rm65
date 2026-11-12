@@ -2,13 +2,13 @@
 
 2026-11-12：用户要求保留此 Servo 运行版，并新增 UR5 风格的官方 IK 连续跟随计算版。新计算核心不接管本文控制图；`official_follow_shadow.launch.py` 只订阅既有目标/反馈并发布 `/rm65/official_follow/shadow` 诊断，不启动驱动或发布运动。使用及验证边界见[双版本说明](../docs/双版本跟随说明.md)。
 
-实现基线：Ubuntu 22.04 / ROS2 Humble；RealMan 上游固定提交 `61db3c367e8f5743ee68cee52c5574ec1ac645ca`，见 [dependencies.repos](dependencies.repos)。当前控制链只有 **InputAdapter → PoseTracking → MoveIt Servo → JTC**。无手柄、PICO 和自动验收只切换输入源，仿真与真机只切换设备接口。MuJoCo 与 GenericSystem 的历史证据见[2026-10-26日志](../docs/logs/2026.10.26.md)，本轮三个入口与 manual 输入的验证见[2026-10-27日志](../docs/logs/2026.10.27.md)；软件仿真不替代实体 PICO、板端 ARM64 和真机验收。
+实现基线：Ubuntu 22.04 / ROS2 Humble；RealMan 上游固定提交 `61db3c367e8f5743ee68cee52c5574ec1ac645ca`，见 [dependencies.repos](dependencies.repos)。当前控制链只有 **InputAdapter → PoseTracking → MoveIt Servo → JTC**。PICO 输入与内部自动验收共用控制节点，测试合成输入不安装为运行入口，仿真与真机只切换设备接口。MuJoCo 与 GenericSystem 的历史证据见[2026-10-26日志](../docs/logs/2026.10.26.md)，本轮三个入口与 manual 输入的验证见[2026-10-27日志](../docs/logs/2026.10.27.md)；软件仿真不替代实体 PICO、板端 ARM64 和真机验收。
 
 ## 数据流与职责
 
 ```text
-浏览器 manual / XR 原生 SDK / CLI mock 自动演示
-  → /rm65/xr/raw                   String：设备 JSON + 时间；manual/mock 明确标记为合成输入
+PICO 手柄 → XR 原生 SDK
+  → /rm65/xr/raw                   String：设备 JSON + 时间；原始手柄数据；合成输入仅限内部测试
   → InputAdapter                  有效性、Grip、侧装映射、实际反馈锚点
   → /rm65/target_pose              PoseStamped：位置(3,)m + 四元数xyzw(4,)
   → Humble PoseTracking            标准位姿误差到速度
@@ -32,7 +32,6 @@ Servo 目标周期 20 ms；JTC 内部按 250 Hz 插值，设备桥接仍按名�
 | --- | --- |
 | [launch](src/rm65_servo_teleop/launch/teleop.launch.py) | 同一模型/配置/节点；依次激活反馈广播和 JTC |
 | [input_adapter.py](src/rm65_servo_teleop/rm65_servo_teleop/input_adapter.py)、[xr_node.py](src/rm65_servo_teleop/rm65_servo_teleop/xr_node.py) | 纯输入规则、ROS 时间/TF/状态检查 |
-| [manual_input.py](src/rm65_servo_teleop/rm65_servo_teleop/manual_input.py)、[manual_node.py](src/rm65_servo_teleop/rm65_servo_teleop/manual_node.py) | 仿真专用人工输入、短期输入租约与 HTTP 状态；只发布标记 XR，不直接生成关节指令 |
 | [pose_tracking_node.cpp](src/rm65_servo_teleop/src/pose_tracking_node.cpp) | 复用上游 PoseTracking，补齐目标/反馈过期、Grip与线程生命周期 |
 | [model.py](src/rm65_servo_teleop/rm65_servo_teleop/model.py) | 官方 URDF/SRDF、历史 TCP 候选、设备接口 |
 | [transport_node.py](src/rm65_servo_teleop/rm65_servo_teleop/transport_node.py)、[transport_guard.py](src/rm65_servo_teleop/rm65_servo_teleop/transport_guard.py) | 最新指令、真实反馈、准入、停止确认与恢复 |
@@ -60,26 +59,25 @@ Windows 根目录可从 `python start.py` 打开桌面控制台，终端菜单�
 
 | 入口 | 路由 |
 | --- | --- |
-| `python start.py sim` | `teleop.py --mode sim --target wsl --input manual` |
 | `python start.py pico` | 同一 sim/WSL 入口，输入改为 pico |
 | `python start.py real` | 交互终端无参进入真机子菜单；显式参数走既有 remote hardware 链，正式执行仍须现场参数与人工准入 |
 
-三种模式共用 [Python 启动编排](../scripts/setup/launcher.py)，无手柄入口明确 manual；仅实际执行 PICO 模式准备本项目 TCP63901 转发，专用 PowerShell 网络助手保留。`--check-only` 只离线预览，不启动 WSL、不枚举网卡或提权。CLI mock 保留一次约15秒的小幅自动演示后释放 Grip，用于离线演示/验收，不是第四个双击入口；CLI 省略输入仍默认 mock。
+PICO 仿真和真机模式共用 [Python 启动编排](../scripts/setup/launcher.py)。实际执行 PICO 仿真才准备 TCP63901 转发；无手柄入口、manual 输入节点和 mock 自动演示已删除。CLI 仿真默认 pico，external 仅用于接入已有 XR 发布者或测试夹具。
 
-manual 服务位于 [http://127.0.0.1:8766](http://127.0.0.1:8766)，启动器仅打印地址，待就绪后自行点击。Space + W/S、A/D、R/F 对应 ±X/Y/Z，Space + J/L、I/K、U/O 对应 ±RX/RY/RZ，或按住页面方向按钮。方向在 `base_link` 中定义；输入目标速率20 mm/s和0.12 rad/s，单段偏移10 cm/0.16 rad到限后须松开重按。松开、失焦、页面隐藏和断线撤销操作，恢复后不自动续动。控制台显示 MuJoCo 实际 q/dq、反馈 TCP、目标、误差、状态和数据年龄；实际仿真反馈不等于实体测量。详见[操作手册](../docs/仿真操作手册.md#2-无手柄控制台)。
+
 
 PICO 的 PC Service 由容器直接管理前台进程，等待 TCP63901 和本地 gRPC60061 都就绪后启动控制图；服务意外退出会结束当前图。SDK 异步 Init 成功不等于头显已连接，只有新鲜合法输入与 Grip 条件均满足才允许模拟跟随。
 
-本机 WSL 默认只打开 MuJoCo，RViz 关闭；需要 TF/模型/目标调试时，用 `python teleop.py --mode sim --input manual --target wsl --rviz` 显式开启。该选项仅支持 WSL sim，不能与 `--no-viewer` 同用。`--no-viewer` 关闭 MuJoCo 窗口和 Foxglove，manual 控制台仍由输入节点提供。GenericSystem 诊断如需窗口，也须显式加 `--rviz`。ROS 直接 launch 的 `rviz` 默认 false。
+本机 WSL 默认只打开 MuJoCo，RViz 关闭；需要 TF/模型/目标调试时，用 `python teleop.py --mode sim --input pico --target wsl --rviz` 显式开启。该选项仅支持 WSL sim，不能与 `--no-viewer` 同用。`--no-viewer` 关闭 MuJoCo 窗口和 Foxglove。GenericSystem 诊断如需窗口，也须显式加 `--rviz`。ROS 直接 launch 的 `rviz` 默认 false。
 
 ## 模式与硬件边界
 
-- `sim`：同一 InputAdapter/PoseTracking/Servo/JTC，默认执行端为 MuJoCo；`--simulator mock` 使用 GenericSystem。允许明确标记的 manual/mock XR。
+- `sim`：同一 InputAdapter/PoseTracking/Servo/JTC，默认执行端为 MuJoCo；`--simulator mock` 使用 GenericSystem。输入来自 PICO 或已有外部 XR 发布者，不生成模拟手柄轨迹。
 - MuJoCo 接入：同一修正URDF生成MJCF，有限力矩位置执行器；ROS控制保持wall time、物理名义1倍速，独立 `/clock` 进度保护在暂停/倒退时结束会话。记录保存引擎与模型哈希，场景暂仅机械臂/地面。
 - `hardware-dry-run`：实际连接官方 SDK 读反馈，原生运动权限关闭，不创建执行服务和命令订阅；桥接层亦不创建执行客户端。
 - `hardware`：只有现场检查文件、部署哈希、明确操作口令均通过才给原生执行权限；反馈、停止和 Grip 仍独立门控。
 
-manual 和 mock 均禁止用于 hardware / hardware-dry-run。`python start.py real` 在交互终端无参进入子菜单，非交互无参列缺项后退出；正式执行必须显式 `--udp-ip`、有效 `--hardware-validation` 与人工 `--live-ack "RM65 LIVE VALIDATION"`，不会生成或批准现场证据。`--check-only` 仅验证参数并预览；`--dry-run` 仍须显式 `--udp-ip`，实际启动会连接真实控制器读反馈。旧快捷脚本已移除，统一使用 `start.py`。
+manual 与 mock 输入选项已移除。`python start.py real` 在交互终端无参进入子菜单，非交互无参列缺项后退出；正式执行必须显式 `--udp-ip`、有效 `--hardware-validation` 与人工 `--live-ack "RM65 LIVE VALIDATION"`，不会生成或批准现场证据。`--check-only` 仅验证参数并预览；`--dry-run` 仍须显式 `--udp-ip`，实际启动会连接真实控制器读反馈。旧快捷脚本已移除，统一使用 `start.py`。
 
 握持新段始于实测 TCP。故障后先释放 Grip，反馈新鲜无错、六轴静止且停止确认满足后才重使能。原生代次屏蔽停止前在途指令；桥断连与 UDP 超时由原生 watchdog 覆盖。
 

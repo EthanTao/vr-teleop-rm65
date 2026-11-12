@@ -205,7 +205,7 @@ def make_parser(kind: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="RM65 Python 启动入口（复用 teleop.py，不改变运动控制与准入）。")
     parser.add_argument("--check-only", action="store_true", help="仅离线验证参数并打印命令，不启动 WSL/SSH/网络配置")
     parser.add_argument("--pause", action="store_true", help="退出前按 Enter；终端调用默认不等待")
-    if kind in {"manual", "pico"}:
+    if kind == "pico":
         parser.add_argument("--distro", default="RM65-Servo")
         parser.add_argument("--listen-address", help="仅 PICO 使用：本机实际 LAN IPv4 地址")
         parser.add_argument("--rviz", action="store_true")
@@ -226,10 +226,10 @@ def make_parser(kind: str) -> argparse.ArgumentParser:
 
 
 def sim_arguments(kind: str, args: argparse.Namespace) -> list[str]:
+    if kind != "pico":
+        raise ValueError("仿真仅保留 PICO 手柄输入")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", args.distro):
         raise ValueError("--distro 必须是有效的 WSL 发行版名称。")
-    if kind != "pico" and args.listen_address:
-        raise ValueError("--listen-address 仅供 PICO 仿真使用。")
     if args.listen_address:
         canonical_ipv4(args.listen_address)
     if args.rviz and args.no_viewer:
@@ -293,8 +293,6 @@ def run(kind: str, args: argparse.Namespace) -> int:
     entry = ROOT / "teleop.py"
     if not entry.is_file():
         raise ValueError(f"缺少统一入口：{entry}")
-    if kind == "manual":
-        status("[无手柄] 服务就绪后打开 http://127.0.0.1:8766；不自动打开浏览器。")
     if args.check_only:
         if kind == "pico":
             status("[PICO] 预览不枚举网卡；执行时校验/选择本机 LAN 地址并准备 TCP63901 转发。")
@@ -332,8 +330,6 @@ def run(kind: str, args: argparse.Namespace) -> int:
         if network:
             status("[2/3] 正在准备本项目 PICO 转发规则……")
             setup_pico_network(network["address"], args.distro)
-        else:
-            status("[2/3] 无手柄模式，不读取网卡、不配置网络。")
         status("[3/3] 启动 MuJoCo / Servo；首次构建较慢，下方显示实时进度。Ctrl+C 结束会话。")
     else:
         # Existing validation must pass offline before SSH/sync/deployment.

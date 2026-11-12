@@ -8,7 +8,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 
-@pytest.mark.parametrize("module_name", ["xr_node", "mock_xr", "journal_node"])
+@pytest.mark.parametrize("module_name", ["xr_node", "xr_fixture", "journal_node"])
 @pytest.mark.parametrize(
     "interruption,context_alive",
     [("keyboard", True), ("external", False), ("external", True), ("error", True), ("error", False), ("rcl", False), ("rcl", True)],
@@ -103,7 +103,8 @@ def test_input_entrypoint_context_shutdown_is_normal_and_cleanup_always_runs(
     install_module("tf2_ros", Buffer=Message, TransformListener=Message, TransformException=Exception)
     install_module("rosidl_runtime_py.convert", message_to_ordereddict=lambda message: message.__dict__)
 
-    path = Path(__file__).resolve().parents[1] / "rm65_servo_teleop" / f"{module_name}.py"
+    path = (Path(__file__).resolve().parent / "xr_fixture.py" if module_name == "xr_fixture" else
+            Path(__file__).resolve().parents[1] / "rm65_servo_teleop" / f"{module_name}.py")
     name = f"rm65_servo_teleop._shutdown_fixture_{module_name}"
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)

@@ -161,7 +161,6 @@ def run_menu(*, check_only: bool = False, real_only: bool = False) -> int:
         }
     else:
         choices = {
-            "1": "无手柄仿真（本机 Windows / WSL）",
             "2": "PICO 仿真（本机 Windows / WSL）",
             "3": "连接真机（读反馈，不运动）",
             "4": "正式真机执行（需要真实现场验证文件及人工确认）",
@@ -180,14 +179,14 @@ def run_menu(*, check_only: bool = False, real_only: bool = False) -> int:
                 return 0
             if not interactive_available():
                 raise ValueError(
-                    "菜单需要交互终端；自动化请使用 start.py sim/pico/real 并提供显式参数。--check-only 可离线查看菜单。"
+                    "菜单需要交互终端；自动化请使用 start.py pico/real 并提供显式参数。--check-only 可离线查看菜单。"
                 )
             choice = input("选择编号：").strip()
             if choice in {"", "0"}:
                 launcher.status("[取消] 菜单已退出；没有继续操作，现有板端会话保持原状。")
                 return 0
             if choice not in choices:
-                launcher.status("无效编号，请输入 0–5；不会默认启动任何模式。")
+                launcher.status("无效编号，请输入菜单中列出的编号；不会默认启动任何模式。")
                 continue
             try:
                 if choice == "5":
@@ -202,8 +201,8 @@ def run_menu(*, check_only: bool = False, real_only: bool = False) -> int:
                         launcher.status("[未完成] 执行入口返回 2；不自动重试或切换模式，可选择只读连接。")
                         continue
                     return result
-                if not real_only and choice in {"1", "2"}:
-                    return launcher.main("manual" if choice == "1" else "pico", [])
+                if not real_only and choice == "2":
+                    return launcher.main("pico", [])
                 action = {"1": "start-readonly", "2": "status", "3": "input"}[choice] if real_only else "start-readonly"
                 return run_board_action(
                     action,

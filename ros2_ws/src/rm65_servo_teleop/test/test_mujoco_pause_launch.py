@@ -1,7 +1,9 @@
 """A paused physics engine must close the live teleoperation graph, not resume it."""
 
 import os
+from pathlib import Path
 import secrets
+import sys
 import time
 import unittest
 
@@ -32,7 +34,7 @@ def generate_test_description():
             "teleop.launch.py",
             "mode:=sim",
             "simulator:=mujoco",
-            "input_source:=mock",
+            "input_source:=external",
             "record:=false",
             "rviz:=false",
         ],
@@ -42,6 +44,8 @@ def generate_test_description():
         [
             SetEnvironmentVariable("ROS_DOMAIN_ID", DOMAIN),
             stack,
+            ExecuteProcess(cmd=[sys.executable, str(Path(__file__).with_name("xr_fixture.py")),
+                                "--ros-args", "-p", "simulation_only:=true"], output="screen"),
             KeepAliveProc(),
             launch_testing.actions.ReadyToTest(),
         ]

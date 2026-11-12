@@ -13,7 +13,7 @@ import pytest
 from rm65_servo_teleop.follow_targets import limit_pose_step
 from rm65_servo_teleop.input_adapter import Pose, quaternion_rotvec, rotvec_quaternion
 from rm65_servo_teleop.official_follow import FollowConfig, OfficialFollower
-from rm65_servo_teleop.official_follow_runner import demo_rows, run_rows
+from rm65_servo_teleop.official_follow_runner import run_rows
 from rm65_servo_teleop.official_sdk import IKRejected, OfficialAlgo
 
 
@@ -190,12 +190,19 @@ def test_upstream_rotational_limit_handles_equivalent_pi_representations():
     assert abs(abs(value[5]) - math.pi) < .002
 
 
-def test_replay_demo_marks_all_feedback_synthetic_and_never_authorizes_execution():
+def test_replay_uses_recorded_feedback_and_never_authorizes_execution():
     solver, cfg, output = AnalyticTestSolver(), config(), io.StringIO()
-    summary = run_rows(demo_rows(solver, [0] * 6, cfg), solver, cfg, output, synthetic=True)
-    assert summary["accepted"] > 50 and summary["hardware_commands_sent"] == 0
+    source = [{"time_s": index * .02, "enabled": index > 0,
+               "target_pose_xyzw": [0.1, 0, 0, 0, 0, 0, 1],
+               "feedback_pose_xyzw": [0, 0, 0, 0, 0, 0, 1],
+               "feedback_joint_rad": [0] * 6} for index in range(4)]
+    original = json.dumps(source)
+    summary = run_rows(source, solver, cfg, output)
+    assert summary["accepted"] == 2 and summary["hardware_commands_sent"] == 0
+    assert summary["states"] == {"idle": 1, "anchoring": 1, "tracking": 2}
+    assert json.dumps(source) == original
     rows = [json.loads(line) for line in output.getvalue().splitlines()]
-    assert all(row["synthetic_feedback"] and row["execution_authorized"] is False for row in rows)
+    assert all(row["feedback"] == "input_record" and row["execution_authorized"] is False for row in rows)
 
 
 @pytest.mark.parametrize("change", [{"period_s": -1}, {"solve_budget_s": .03},

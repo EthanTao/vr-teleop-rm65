@@ -23,13 +23,11 @@ def _positive(value, name):
     return value
 
 
-def write_scene(description: str, semantic: str, config: dict, physics: dict, directory: Path,
-                *, package_roots: dict[str, Path] | None = None) -> Path:
+def write_scene(description: str, semantic: str, config: dict, physics: dict, directory: Path) -> Path:
     """Compile, enrich and revalidate a model in a caller-owned temporary folder."""
     import mujoco
     import numpy as np
-    if package_roots is None:
-        from ament_index_python.packages import get_package_share_directory
+    from ament_index_python.packages import get_package_share_directory
 
     timestep = _positive(physics["timestep_s"], "timestep_s")
     if timestep > 0.004:
@@ -48,8 +46,7 @@ def write_scene(description: str, semantic: str, config: dict, physics: dict, di
         if not filename.startswith("package://"):
             raise ValueError("vendor meshes must use explicit package:// references")
         package, relative = filename[len("package://") :].split("/", 1)
-        share = (Path(get_package_share_directory(package)) if package_roots is None
-                 else Path(package_roots[package])).resolve()
+        share = Path(get_package_share_directory(package)).resolve()
         path = (share / relative).resolve()
         if not path.is_relative_to(share) or not path.is_file():
             raise ValueError(f"invalid vendor mesh: {filename}")
