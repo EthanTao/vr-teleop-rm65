@@ -49,6 +49,7 @@ install(PROGRAMS scripts/xr_input_node scripts/rm65_driver_bridge
   scripts/rm65_journal scripts/rm65_simulation_guard scripts/rm65_simulation_reset
   scripts/rm65_tcp_overlay DESTINATION lib/${PROJECT_NAME})
 install(PROGRAMS scripts/rm65_official_follow_shadow DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/rm65_websim scripts/rm65_websim_ready scripts/rm65_official_sim_follow DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY licenses DESTINATION share/${PROJECT_NAME})
 install(FILES ../../patches/realman_driver_feedback.patch DESTINATION share/${PROJECT_NAME}/patches)

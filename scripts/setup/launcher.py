@@ -210,6 +210,8 @@ def make_parser(kind: str) -> argparse.ArgumentParser:
         parser.add_argument("--listen-address", help="仅 PICO 使用：本机实际 LAN IPv4 地址")
         parser.add_argument("--rviz", action="store_true")
         parser.add_argument("--no-viewer", action="store_true")
+        parser.add_argument("--browser", action="store_true", help="MuJoCo 4 浏览器查看 PICO 遥操作")
+        parser.add_argument("--controller", choices=["servo", "official"], default="servo")
     elif kind == "menu":
         pass  # Interactive selection only; explicit deployment parameters use the existing shortcuts.
     elif kind == "real":
@@ -289,6 +291,11 @@ def preview(options: list[str]) -> int:
 
 
 def run(kind: str, args: argparse.Namespace) -> int:
+    if kind == "pico" and getattr(args, "browser", False):
+        from scripts.setup.websim import run as run_websim
+        return run_websim(args)
+    if kind == "pico" and getattr(args, "controller", "servo") != "servo":
+        raise ValueError("官方 IK 手柄仿真请加 --browser；不会切换真机控制链")
     options = real_arguments(args) if kind == "real" else sim_arguments(kind, args)
     entry = ROOT / "teleop.py"
     if not entry.is_file():

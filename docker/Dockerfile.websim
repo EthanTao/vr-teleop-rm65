@@ -1,0 +1,27 @@
+# Dedicated MuJoCo 4 Python physics. The legacy 3.12 C++ plugin is never loaded.
+# First build Dockerfile.moveit with RM65_WITH_XR_SDK=ON (the launcher does this).
+ARG BASE_IMAGE=rm65-servo:humble
+FROM python:3.11.11-slim-bullseye@sha256:eea93906fa271284cd1bd0742448767a6afe352245c67e1b6ff4a9f22201f867 AS python311
+FROM ${BASE_IMAGE} AS dependencies
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN test -x /opt/rm65_ws/install/lib/rm65_servo_teleop/xr_sdk_node
+COPY --from=python311 /usr/local /opt/python311
+COPY --from=python311 /usr/lib/*/libssl.so.1.1 /usr/lib/*/libcrypto.so.1.1 /usr/lib/*/libffi.so.7 /opt/python311/lib/
+RUN --mount=type=cache,target=/root/.cache/pip \
+    LD_LIBRARY_PATH=/opt/python311/lib /opt/python311/bin/python3.11 -m pip install \
+      --disable-pip-version-check --default-timeout 120 --retries 5 \
+      --prefix=/opt/python311 'numpy==1.26.4' 'PyYAML==6.0.2' 'mujoco-core==4.0.0' \
+    && LD_LIBRARY_PATH=/opt/python311/lib /opt/python311/bin/python3.11 -c 'import mujoco; assert mujoco.__version__ == "4.0.0"'
+COPY docker/install_websim_dependencies.py /tmp/install_websim_dependencies.py
+RUN python3 /tmp/install_websim_dependencies.py
+ENV PYTHONPATH=/opt/rm65-official-sdk
+FROM dependencies AS runtime
+RUN rm -rf /opt/rm65_ws/src/rm65_servo_teleop
+COPY ros2_ws/src/rm65_servo_teleop /opt/rm65_ws/src/rm65_servo_teleop
+RUN source /opt/ros/humble/setup.bash && source /opt/rm65_ws/install/setup.bash \
+    && cd /opt/rm65_ws && colcon build --merge-install --packages-select rm65_servo_teleop \
+       --cmake-args -DBUILD_TESTING=ON -DRM65_WITH_XR_SDK=ON
+ARG RM65_SOURCE_SHA=unknown
+LABEL org.rm65.source-sha="${RM65_SOURCE_SHA}" org.rm65.websim="4.0.0"
+# No default launch and no robot device/network mapping.
+CMD ["sleep", "infinity"]

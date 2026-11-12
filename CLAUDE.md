@@ -1,6 +1,6 @@
 # 项目工作规范
 
-PICO + XRoboToolkit → 侧装 RealMan RM65。**2026-11-12 用户要求本地同时保留 MoveIt Servo 版与参照 UR5 实现的官方 IK 连续跟随版。** 当前正式ROS控制图仍为Servo；新版`official_follow.py`支持录制数据回放及ROS shadow；按用户最新要求已移除所有无手柄仿真入口，不覆盖Servo、不接真实发送。两版范围、入口和证据见[双版本说明](docs/双版本跟随说明.md)。日常Servo使用`start.py`；底层仍是`teleop.py` → `servo_launcher.py` → `ros2_ws/src/rm65_servo_teleop/launch/teleop.launch.py`。
+PICO + XRoboToolkit → 侧装 RealMan RM65。**2026-11-12 用户要求保留 Servo/官方 IK 两版、删除全部无手柄入口，随后要求两版都接 PICO 并在 MuJoCo 4 浏览器查看。** 现有真机仍为Servo，官方IK不接真实发送。两版浏览器入口为`python start.py pico --browser --controller servo|official`，共用真实PICO输入及MuJoCo 4物理反馈；网页只查看，无自动轨迹。见[双版本浏览器仿真](docs/PICO浏览器双版本仿真.md)及[双版本说明](docs/双版本跟随说明.md)。原`teleop.py` → `servo_launcher.py` → `teleop.launch.py`继续保留。
 
 Windows 本机仿真采用 WSL2 `RM65-Servo`（Ubuntu22.04 + Docker Engine），用户已授权必要时清旧环境后重建；旧 Ubuntu20.04 已备份并清理。ROS2 Humble 仍在同一 Docker 镜像内运行，真机使用板端执行。当前验证以[本机部署页](docs/本机仿真部署.md)和工作日志为准。
 
@@ -17,8 +17,8 @@ Windows 本机仿真采用 WSL2 `RM65-Servo`（Ubuntu22.04 + Docker Engine），
 
 ## 必须遵守
 
-1. **唯一运动发送者，保留两版源码。** 现行 Servo 输入适配只处理输入有效性、Grip、映射和锚点；位姿跟随、IK、平滑和模型保护仍交给 PoseTracking / Servo，JTC 处理轨迹。新版官方 IK 在独立进程只计算并输出候选诊断，不向设备命令、使能或停止接口发布。不得把两版同时接入真实发送；后续接管执行须明确记录行为差异和独立验收。不恢复归档的旧 DLS/多后端入口。
-2. **仿真与真机使用同一组控制配置。** 默认仿真使用 MuJoCo / mujoco_ros2_control；GenericSystem 仅供快速控制图诊断，真机为受控 TopicBasedSystem。保持同一 Servo/JTC，不添加仿真专用 IK。MuJoCo 的执行器与接触参数属于未标定假设，模拟反馈不证明真实执行。
+1. **唯一运动发送者，保留两版源码。** 现行Servo保持PoseTracking/Servo/JTC。官方IK独立核心用于回放、shadow和用户授权的PICO物理仿真；新的`official_sim_node.py`仅能发布私有`/rm65/websim/joint_commands`，不得连接真实驱动话题。原shadow仍只发诊断。每次只启动一版，不能同时接入真实发送；真实接管仍需独立验收。不恢复归档旧DLS。
+2. **同一配置与明确物理版本。** 两版浏览器共用模型/输入/安全/执行器配置和MuJoCo 4.0.0，Servo保留同一Servo/JTC，官方版复用同一官方IK核心，不添加仿真专用IK。MuJoCo4使用独立Python3.11 worker，经私有管道连接ROS3.10；原3.12 C++物理插件不加载到浏览器版。原生Servo仿真保留3.12 / mujoco_ros2_control；GenericSystem仅诊断，真机为受控TopicBasedSystem。动力学与接触参数未经实机辨识，模拟反馈不批准真实执行。
 3. **帧未验证不得上机。** 当前 d6、finger TCP 来源于历史快照，安装位姿仍需现场核对；与官方 FK / UDP TCP 对比。默认竖立显示不等于真实侧装方向已经标定。
 4. **新鲜反馈来自真实 UDP 包。** 禁止用缓存重打时间戳；要求同帧 q/qdot/错误、包标识和源会话。官方旧 `/joint_states` 仅作诊断，不能代替该依据。
 5. **唯一发送者。** 厂商补丁关闭旧运动入口；原生执行权限默认 false。Dry Run 不创建执行接口。真实使能、停止确认、反馈超时和故障锁存均须有记录。

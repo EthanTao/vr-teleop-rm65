@@ -43,7 +43,8 @@ def python_executable() -> str:
 
 
 def simulation_command(
-    kind: str, *, distro: str, address: str = "", rviz: bool = False, preview: bool = False
+    kind: str, *, distro: str, address: str = "", rviz: bool = False, preview: bool = False,
+    browser: bool = False, controller: str = "servo"
 ) -> list[str]:
     if kind != "pico":
         raise ValueError("仿真仅保留 PICO 手柄输入。")
@@ -57,6 +58,12 @@ def simulation_command(
         distro=distro, listen_address=address if kind == "pico" else None, rviz=rviz, no_viewer=False
     )
     launcher.sim_arguments("pico", parsed)
+    if controller not in {"servo", "official"}:
+        raise ValueError("请选择 Servo 或官方 IK。")
+    if browser:
+        if rviz:
+            raise ValueError("浏览器仿真不使用 RViz；请关闭连接设置中的 RViz 选项。")
+        options += ["--browser", "--controller", controller]
     if preview:
         options.append("--check-only")
     return [python_executable(), "-X", "utf8", "-u", str(ROOT / "start.py"), kind, *options]
@@ -234,7 +241,6 @@ class DesktopApp:
                 "ack": "",
             }.items()
         }
-        self.rviz = ctk.BooleanVar(value=False)
         self.state = ctk.StringVar(value="空闲 · 尚未启动任务")
         self.current = ctk.StringVar(value="选择一个实验场景")
         self._build()
@@ -350,11 +356,13 @@ class DesktopApp:
         for index, (kind, title, subtitle, body) in enumerate(
             [
                 (
-                    "pico",
-                    "PICO 遥操作仿真",
-                    "PICO SIMULATION",
-                    "使用真实手柄操作本机 MuJoCo。\n按启动日志显示的地址连接头显。",
+                    "servo",
+                    "MoveIt Servo · PICO",
+                    "MUJOCO 4 · BROWSER",
+                    "保留 Servo / JTC 控制链。\n使用 PICO 手柄，在浏览器查看物理反馈。",
                 ),
+                ("official", "官方 IK · PICO", "MUJOCO 4 · BROWSER",
+                 "UR5 风格连续跟随与官方逆解。\n使用 PICO 手柄，在浏览器查看物理反馈。"),
             ]
         ):
             self.sim_page.grid_columnconfigure(index, weight=1)
@@ -373,7 +381,8 @@ class DesktopApp:
             self.button(row, "离线预览", lambda k=kind: self.start_sim(k, True), task=True, width=104).pack(side="left")
         row = ctk.CTkFrame(self.sim_page, fg_color="transparent")
         row.grid(row=1, column=0, columnspan=2, sticky="w", pady=(12, 0))
-        self.label(row, "按日志地址连接 PICO；MuJoCo 窗口按 R 复位。", size=10, color=self.MUTED).pack(side="left", padx=12)
+        self.button(row, "打开浏览器仿真 ↗", lambda: webbrowser.open("http://127.0.0.1:8094/"), width=180).pack(side="left")
+        self.label(row, "服务就绪后打开；先松 Grip 再握住。", size=10, color=self.MUTED).pack(side="left", padx=12)
 
     def _hardware(self):
         ctk = self.ctk
@@ -446,12 +455,6 @@ class DesktopApp:
                 row=row + 1, column=column, sticky="ew", padx=18, pady=(0, 8)
             )
         card.grid_columnconfigure((0, 1), weight=1)
-        ctk.CTkCheckBox(
-            card,
-            text="仿真时打开 RViz 调试窗口",
-            variable=self.rviz,
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=11),
-        ).grid(row=7, column=0, sticky="w", padx=18, pady=(8, 16))
         self.label(card, "设置仅在本次窗口内生效。", size=10, color=self.MUTED).grid(
             row=7, column=1, sticky="e", padx=18
         )
@@ -498,12 +501,11 @@ class DesktopApp:
 
     def start_sim(self, kind, preview):
         self.launch(
-            "PICO 仿真",
+            "官方 IK · PICO" if kind == "official" else "MoveIt Servo · PICO",
             lambda: simulation_command(
-                kind,
+                "pico", browser=True, controller=kind,
                 distro=self.values["distro"].get().strip(),
                 address=self.values["address"].get().strip(),
-                rviz=self.rviz.get(),
                 preview=preview,
             ),
             preview=preview,

@@ -78,15 +78,15 @@ def test_empty_or_zero_menu_exits_without_dispatch(monkeypatch, real_only, choic
     assert menu.run_menu(real_only=real_only) == 0
 
 
-@pytest.mark.parametrize("choice,kind", [("2", "pico")])
-def test_root_simulation_routes_existing_launcher_without_extra_flags(monkeypatch, choice, kind):
+@pytest.mark.parametrize("choice,controller", [("1", "official"), ("2", "servo")])
+def test_root_simulation_routes_selected_pico_browser_controller(monkeypatch, choice, controller):
     set_tty(monkeypatch)
     answers(monkeypatch, choice)
     dispatch = Mock(return_value=17)
     monkeypatch.setattr(launcher, "main", dispatch)
     monkeypatch.setattr(menu, "run_board_action", forbidden)
     assert menu.run_menu() == 17
-    dispatch.assert_called_once_with(kind, [])
+    dispatch.assert_called_once_with("pico", ["--browser", "--controller", controller])
 
 
 @pytest.mark.parametrize(

@@ -1,0 +1,19 @@
+services:
+  websim:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.websim
+      network: host  # Build downloads only; the running simulator stays on its private bridge.
+    image: rm65-websim:4.0
+    restart: "no"
+    stdin_open: true
+    tty: true
+    environment:
+      ROS_DOMAIN_ID: "174"
+      ROS_LOCALHOST_ONLY: "1"
+      QT_QPA_PLATFORM: offscreen  # Vendor PICO service uses Qt; no desktop display is needed.
+    ports:
+      - "63901:63901/tcp"
+      - "127.0.0.1:8094:8094/tcp"
+    volumes:
+      - ../build/experiments:/data/experiments:rw

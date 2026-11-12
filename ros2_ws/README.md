@@ -1,5 +1,7 @@
 # 单一 MoveIt Servo 控制链
 
+新增PICO浏览器仿真入口：`pico_web.launch.py controller:=servo|official`。Servo保留本页控制链，官方版复用同一`OfficialFollower`，共用独立MuJoCo4物理worker和实际反馈；不启动真实驱动。环境与使用见[PICO浏览器双版本仿真](../docs/PICO浏览器双版本仿真.md)。本页原`teleop.launch.py`继续保留。
+
 2026-11-12：用户要求保留此 Servo 运行版，并新增 UR5 风格的官方 IK 连续跟随计算版。新计算核心不接管本文控制图；`official_follow_shadow.launch.py` 只订阅既有目标/反馈并发布 `/rm65/official_follow/shadow` 诊断，不启动驱动或发布运动。使用及验证边界见[双版本说明](../docs/双版本跟随说明.md)。
 
 实现基线：Ubuntu 22.04 / ROS2 Humble；RealMan 上游固定提交 `61db3c367e8f5743ee68cee52c5574ec1ac645ca`，见 [dependencies.repos](dependencies.repos)。当前控制链只有 **InputAdapter → PoseTracking → MoveIt Servo → JTC**。PICO 输入与内部自动验收共用控制节点，测试合成输入不安装为运行入口，仿真与真机只切换设备接口。MuJoCo 与 GenericSystem 的历史证据见[2026-10-26日志](../docs/logs/2026.10.26.md)，本轮三个入口与 manual 输入的验证见[2026-10-27日志](../docs/logs/2026.10.27.md)；软件仿真不替代实体 PICO、板端 ARM64 和真机验收。

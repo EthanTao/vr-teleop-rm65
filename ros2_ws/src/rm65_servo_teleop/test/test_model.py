@@ -48,6 +48,18 @@ def test_sim_and_hardware_change_only_device_interfaces(vendor):
         assert float(root.find(f"joint[@name='joint{i}']/limit").get("velocity")) == speed
 
 
+def test_browser_physics_has_same_geometry_and_only_private_simulation_topics(vendor):
+    config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    baseline = build_description(vendor, config, "sim")
+    browser = build_description(vendor, config, "sim", simulator="websim")
+    assert model_digest(baseline) == model_digest(browser)
+    assert "/rm65/websim/joint_commands" in browser and "/rm65/websim/joint_states" in browser
+    assert "/rm65/transport/" not in browser and "MujocoSystemInterface" not in browser
+    for mode in ("hardware", "hardware-dry-run"):
+        with pytest.raises(ValueError):
+            build_description(vendor, config, mode, simulator="websim")
+
+
 def test_model_changes_invalidate_hardware_evidence(vendor):
     config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     first = model_digest(build_description(vendor, config, "sim"))

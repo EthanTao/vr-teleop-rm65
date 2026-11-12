@@ -37,7 +37,7 @@ def build_description(
 ) -> str:
     if mode not in {"sim", "hardware-dry-run", "hardware"}:
         raise ValueError("invalid execution mode")
-    if simulator not in {"mock", "mujoco"} or (mode != "sim" and simulator != "mock"):
+    if simulator not in {"mock", "mujoco", "websim"} or (mode != "sim" and simulator != "mock"):
         raise ValueError("MuJoCo can only be selected for simulation")
     root = ET.parse(vendor_urdf).getroot()
     root.set("name", "rm65_servo")
@@ -98,6 +98,14 @@ def build_description(
             "headless": str(headless).lower(),
             "sim_speed_factor": "1.0",
             "initial_keyframe": "home",
+        }.items():
+            ET.SubElement(hardware, "param", name=name).text = value
+    elif mode == "sim" and simulator == "websim":
+        ET.SubElement(hardware, "plugin").text = "topic_based_ros2_control/TopicBasedSystem"
+        for name, value in {
+            "joint_commands_topic": "/rm65/websim/joint_commands",
+            "joint_states_topic": "/rm65/websim/joint_states",
+            "trigger_joint_command_threshold": "-1",
         }.items():
             ET.SubElement(hardware, "param", name=name).text = value
     elif mode == "sim":

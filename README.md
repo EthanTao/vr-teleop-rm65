@@ -2,7 +2,7 @@
 
 PICO 手柄 → **InputAdapter → PoseTracking → MoveIt Servo → JointTrajectoryController（JTC）→ MuJoCo / RM65 官方驱动**。设备接口可切换，现行执行链保持一条；旧 Placo、旧官方 IK 和 shared-dls 入口已归档，新的官方 IK 计算版另行保留。
 
-2026-11-12：按用户要求本地保留两版。上面的 Servo 版仍通过 `start.py` 使用；新增 UR5 风格的板端官方 IK 跟随计算核心，独立入口为 `official_follow.py`，现阶段仅录制数据回放或 ROS 只算不发观察，不接管设备。两版对照、SDK 与运行方式见[双版本跟随说明](docs/双版本跟随说明.md)。
+2026-11-12：本地保留 Servo 与 UR5 风格官方 IK 两版。两版都已接入 **PICO 手柄 → MuJoCo 4 浏览器仿真**，桌面或终端菜单可选择，网页地址 `http://127.0.0.1:8094/`；操作见[PICO 浏览器双版本仿真](docs/PICO浏览器双版本仿真.md)。官方 IK 的 `official_follow.py` 回放及 ROS shadow 仍保留，不接管真机。
 
 **机器人断电时，Windows 本机通过 WSL2 运行同一套 ROS 仿真。** 新环境为 D 盘的 `RM65-Servo`（Ubuntu 22.04 + Docker Engine），不需要 Docker Desktop。真机仍由板端 Linux 接入；两者共用控制代码。部署与验证状态见[本机仿真](docs/本机仿真部署.md)。
 
@@ -15,6 +15,8 @@ Windows 需要 Python 3.10+。**日常运行 `python start.py`，打开 RM65 Stu
 | `python start.py` | [统一桌面入口](start.py)：仿真启动、真机只读/查询、正式执行、连接设置和日志 |
 | `python start.py --cli` | 原终端交互菜单；`--check-only` 仅打印菜单和说明 |
 | `python start.py pico` | PICO 仿真：真实手柄输入，本机 MuJoCo 执行 |
+| `python start.py pico --browser --controller official` | 官方 IK + PICO，MuJoCo 4 浏览器物理仿真 |
+| `python start.py pico --browser --controller servo` | MoveIt Servo/JTC + PICO，同一 MuJoCo 4 浏览器执行端 |
 | `python start.py real` | 真机子菜单；非交互无参仍拒绝启动，显式参数与原准入条件相同 |
 
 首次安装桌面组件：`python -m pip install -e ".[desktop]"`。之后从项目根目录运行 `python start.py`，也可在正确的 Python 文件关联下双击 `start.py`。窗口中的“结束当前会话”向本次任务发送中断并等待退出，进程结束不代表实体停止已确认。桌面使用说明与开源选型见[桌面控制台](docs/桌面控制台.md)，启动日志保存在 `build/logs/startup/*.log`。

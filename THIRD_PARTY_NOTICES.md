@@ -1,5 +1,11 @@
 # Third-party notices
 
+## Browser simulation dependencies
+
+- The readonly viewer uses Three.js 0.180.0 (MIT), downloaded from the official npm registry at image build time. Its tarball SHA-256 is checked and `THREE-LICENSE.txt` is kept beside the served assets; JavaScript assets are not vendored into this repository.
+- The compute-only RealMan Python API2 files are downloaded from fixed commit `a810b9fdea29e3567c5e9155794e6ef9cc17be62`, with Git blob hashes checked. Vendor binaries remain dependencies of the locally built image, not repository files.
+- The isolated Python runtime comes from the official `python:3.11.11-slim-bullseye` image pinned by its multi-architecture digest. MuJoCo Core 4.0.0 and NumPy/PyYAML are installed only in that runtime; their package licenses remain installed.
+
 ## HDU-EILab/ur5-teleop
 
 - Repository: https://github.com/HDU-EILab/ur5-teleop

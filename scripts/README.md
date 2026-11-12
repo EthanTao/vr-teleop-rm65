@@ -2,6 +2,8 @@
 
 日常从根目录运行 `python start.py`，打开 [RM65 Studio](../start.py) 桌面控制台。`python start.py --cli` 保留终端菜单；`pico`、`real` 可直接选择模式。中文 Python 入口、旧 `.cmd` 和 PowerShell 快捷启动脚本已移除。运动链仍是 **InputAdapter → PoseTracking → MoveIt Servo → JTC**，仿真默认只打开 MuJoCo，RViz 关闭。
 
+桌面/终端菜单现提供官方IK和Servo两版PICO浏览器仿真；显式入口为`python start.py pico --browser --controller official|servo`，见[PICO浏览器双版本仿真](../docs/PICO浏览器双版本仿真.md)。[setup/websim.py](setup/websim.py)仅编排本机隔离镜像与同一PICO网络准备，不接板端部署或真机模式。
+
 仿真仅保留 PICO 手柄输入；键盘/按钮控制台与自动轨迹入口已删除。
 
 需要查看 TF、模型或目标时，用 `python teleop.py --mode sim --input pico --target wsl --rviz` 按需打开 RViz；它不计算物理或执行运动保护。`--rviz` 只支持 WSL sim，不能与 `--no-viewer` 同用；后者关闭 MuJoCo 窗口和 Foxglove。

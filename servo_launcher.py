@@ -27,6 +27,9 @@ SOURCE_PATHS = (
     ".dockerignore",
     "teleop.py",
     "servo_launcher.py",
+    "docker/Dockerfile.websim",
+    "docker/compose.websim.yml",
+    "docker/install_websim_dependencies.py",
 )
 
 

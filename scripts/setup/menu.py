@@ -149,9 +149,9 @@ def run_execution(settings: BoardSettings | None = None) -> int | None:
 
 
 def run_menu(*, check_only: bool = False, real_only: bool = False) -> int:
-    launcher.status("\nRM65 真机菜单（MoveIt Servo）" if real_only else "\nRM65 统一启动菜单（MoveIt Servo）")
+    launcher.status("\nRM65 真机菜单（MoveIt Servo）" if real_only else "\nRM65 统一启动菜单")
     launcher.status("[连接] 真机：PICO 头显 → 板端 WiFi → 机械臂；电脑负责启动/查询，无需先连接手柄。")
-    launcher.status("[控制] teleop.py → servo_launcher.py → ROS / MoveIt Servo；只读操作复用已部署环境，不恢复旧后端。")
+    launcher.status("[控制] PICO 仿真可选官方 IK / Servo，两版均在 MuJoCo 4 浏览器查看；真机保留现有 Servo 控制链。")
     if real_only:
         choices = {
             "1": "连接真机（读反馈，不运动）",
@@ -161,7 +161,8 @@ def run_menu(*, check_only: bool = False, real_only: bool = False) -> int:
         }
     else:
         choices = {
-            "2": "PICO 仿真（本机 Windows / WSL）",
+            "1": "官方 IK · PICO 浏览器仿真",
+            "2": "MoveIt Servo · PICO 浏览器仿真",
             "3": "连接真机（读反馈，不运动）",
             "4": "正式真机执行（需要真实现场验证文件及人工确认）",
         }
@@ -201,8 +202,8 @@ def run_menu(*, check_only: bool = False, real_only: bool = False) -> int:
                         launcher.status("[未完成] 执行入口返回 2；不自动重试或切换模式，可选择只读连接。")
                         continue
                     return result
-                if not real_only and choice == "2":
-                    return launcher.main("pico", [])
+                if not real_only and choice in {"1", "2"}:
+                    return launcher.main("pico", ["--browser", "--controller", "official" if choice == "1" else "servo"])
                 action = {"1": "start-readonly", "2": "status", "3": "input"}[choice] if real_only else "start-readonly"
                 return run_board_action(
                     action,
